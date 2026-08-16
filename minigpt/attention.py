@@ -85,16 +85,18 @@ class KVCacheCausalSelfAttention(nn.Module):
         wei = q @ k.transpose(-2, -1)
 
         wei = wei * (self.head_size ** (-0.5))
-        
-        causal_mask = self.tril[
-            past_len:past_len + T,
-            :past_len + T,
-        ]
 
-        wei = wei.masked_fill(
-            causal_mask == 0,
-            float("-inf"),
-        )
+        if past_kv is None or T > 1:
+        
+            causal_mask = self.tril[
+                past_len:past_len + T,
+                :past_len + T,
+            ]
+
+            wei = wei.masked_fill(
+                causal_mask == 0,
+                float("-inf"),
+            )
 
         wei = F.softmax(wei, dim=-1)
 
