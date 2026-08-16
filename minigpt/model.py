@@ -16,7 +16,6 @@ class MiniGPT(nn.Module):
         dropout: float = 0.0,
         n_layer: int = 1,
         enable_activation_checkpointing: bool = False,
-        atten_impl: str = "naive",
     ):
         super().__init__()
 
@@ -41,7 +40,6 @@ class MiniGPT(nn.Module):
                     n_head=n_head,
                     block_size=block_size,
                     dropout=dropout,
-                    atten_impl=atten_impl,
                 )
                 for _ in range(n_layer)
             ]
@@ -56,14 +54,18 @@ class MiniGPT(nn.Module):
     def forward(
         self,
         idx: Tensor,
+        past_key_values: list[tuple[Tensor, Tensor]] | None = None,
+        use_cache: bool = False,
         targets: Tensor | None = None
-    ) -> tuple[Tensor, Tensor]:
+    ):
         B, T = idx.shape
 
         if T > self.block_size:
             raise ValueError(f"{T} must be smaller than {self.block_size}")
 
-        positions = torch.arange(T, device=idx.device)
+        past_len = past_key_values[0][0].size(2) if past_key_values else 0
+
+        positions = torch.arange(past_len, past_len + T, device=idx.device)
 
         position_embeddings = self.position_embedding_table(positions)
 
@@ -71,7 +73,9 @@ class MiniGPT(nn.Module):
 
         x = position_embeddings + token_embeddings
 
-        for block in self.blocks:
+        present_key_values = [] if use_cache else None
+
+        for idx, block in enumerate(self.blocks):
             should_checkpoint = (
                 self.enable_activation_checkpointing
                 and self.training
@@ -79,14 +83,29 @@ class MiniGPT(nn.Module):
             )
 
             if should_checkpoint:
-                x = checkpoint(
+                x, _ = checkpoint(
                     block,
                     x,
                     use_reentrant=False,
                     preserve_rng_state=True,
                 )
-            else:
-                x = block(x)
+                continue
+
+            past_kv = (
+                past_key_values[idx]
+                if past_key_values is not None
+                else None
+            )
+
+            x, present_kv = block(
+                x,
+                past_kv=past_kv,
+                use_cache=use_cache,
+            )
+
+            if use_cache:
+                present_key_values.append(present_kv)
+                
 
         x = self.layer_norm(x)
 
@@ -103,48 +122,4 @@ class MiniGPT(nn.Module):
 
             loss = F.cross_entropy(logits_flat, targets_flat)
 
-        return logits, loss
-
-    def generate(
-        self,
-        idx: Tensor,
-        max_new_tokens: int,
-        temperature: float = 1.0,
-        top_k: int | None = None,
-    ) -> Tensor:
-        was_training = self.training
-
-        self.eval()
-
-        for _ in range(max_new_tokens):
-            idx_cond = idx[:, -self.block_size:]
-
-            logits, _ = self(idx_cond)
-
-            logits = logits[:, -1, :]
-
-            logits = logits / temperature
-
-            if top_k is not None:
-                actual_k = min(top_k, self.vocab_size)
-
-                top_values, _ = torch.topk(
-                    logits,
-                    k=actual_k,
-                    dim=-1
-                )
-
-                thresold = top_values[:, -1:]
-
-                logits = logits.masked_fill(
-                    logits < thresold,
-                    float('-inf')
-                )
-
-            probs = F.softmax(logits, dim=-1)
-
-            idx_next = torch.multinomial(probs, num_samples=1)
-
-            idx = torch.cat([idx, idx_next], dim=-1)
-
-        return idx
+        return logits, loss, present_key_values

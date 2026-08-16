@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+checkpoints/
+data/
+outputs/
+logs/
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.trace.json
