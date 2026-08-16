@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from minigpt.block import TransformerBlock
+from minigpt.attention import KVCache
 
 class MiniGPT(nn.Module):
     def __init__(
@@ -54,7 +55,7 @@ class MiniGPT(nn.Module):
     def forward(
         self,
         idx: Tensor,
-        past_key_values: list[tuple[Tensor, Tensor]] | None = None,
+        kv_caches: list[KVCache] | None = None,
         use_cache: bool = False,
         targets: Tensor | None = None
     ):
@@ -63,7 +64,7 @@ class MiniGPT(nn.Module):
         if T > self.block_size:
             raise ValueError(f"{T} must be smaller than {self.block_size}")
 
-        past_len = past_key_values[0][0].size(2) if past_key_values else 0
+        past_len = kv_caches[0].length if kv_caches is not None else 0
 
         positions = torch.arange(past_len, past_len + T, device=idx.device)
 
@@ -91,15 +92,15 @@ class MiniGPT(nn.Module):
                 )
                 continue
 
-            past_kv = (
-                past_key_values[idx]
-                if past_key_values is not None
+            past_kv_cache = (
+                kv_caches[idx]
+                if kv_caches is not None
                 else None
             )
 
             x, present_kv = block(
                 x,
-                past_kv=past_kv,
+                kv_cache=past_kv_cache,
                 use_cache=use_cache,
             )
 

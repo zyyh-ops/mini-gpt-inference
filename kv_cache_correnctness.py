@@ -1,5 +1,7 @@
 import torch
 from minigpt.model import MiniGPT
+from minigpt.attention import KVCache, create_kv_cache
+
 from torch import Tensor
 
 
@@ -30,6 +32,7 @@ def compare(name, a, b, atol=1e-5, rtol=1e-5):
 def check_prefill(
     model: MiniGPT, 
     input_ids: Tensor,
+    kv_caches: list[KVCache] | None = None,
 ):
     model.eval()
 
@@ -38,8 +41,9 @@ def check_prefill(
         use_cache=False,
     )
 
-    cached_logits, _, kv_cache = model(
+    cached_logits, _, kv_caches = model(
         input_ids,
+        kv_caches=kv_caches,
         use_cache=True,
     )
 
@@ -48,19 +52,22 @@ def check_prefill(
     print("naive logits :", naive_logits.shape)
     print("cache logits:", cached_logits.shape)
 
-    compare(
+    prefill_ok = compare(
         "prefill full logits",
         naive_logits,
         cached_logits,
     )
 
-    return kv_cache
+    print(prefill_ok)
+
+    return kv_caches
 
 
 @torch.inference_mode()
 def check_generation_correnctness(
     model: MiniGPT,
     input_ids: Tensor,
+    kv_caches: list[KVCache] | None = None,
     max_new_tokens=8,
     atol=1e-5,
     rtol=1e-5,
@@ -74,8 +81,9 @@ def check_generation_correnctness(
         use_cache=False,
     )
 
-    cached_logits, _, kv_cache = model(
+    cached_logits, _, kv_caches = model(
         tokens,
+        kv_caches=kv_caches,
         use_cache=True,
     )
 
@@ -140,7 +148,7 @@ def check_generation_correnctness(
 
         print(
             f"step={step:02d} "
-            f"seq_len={tokens.size(1):4d} "
+            f"seq_len={input_ids.size(1):4d} "
             f"max_abs={max_abs:.6e} "
             f"mean_abs={mean_abs:.6e} "
             f"allclose={logits_ok} "
@@ -180,13 +188,13 @@ def check_generation_correnctness(
             use_cache=False,
         )
 
-        cached_logits, _, kv_cache = model(
+        cached_logits, _, kv_caches = model(
             next_token,
-            past_key_values=kv_cache,
+            kv_caches=kv_caches,
             use_cache=True,
         )
 
-        check_cache_length(kv_cache, tokens.size(-1))
+        check_cache_length(kv_caches, tokens.size(-1))
 
     print()
     print("All correctness checks passed.")
@@ -195,17 +203,17 @@ def check_generation_correnctness(
 
 
 def check_cache_length(
-    kv_cache,
+    kv_caches,
     expected_length,
 ):
-    for idx, (k, v) in enumerate(kv_cache):
-        assert k.shape == v.shape
+    for idx, kv_cache in enumerate(kv_caches):
+        assert kv_cache.k.shape == kv_cache.v.shape
 
-        assert k.size(2) == expected_length, (
+        assert kv_cache.length == expected_length, (
             f"layer {idx}: "
             f"expected cache length "
             f"{expected_length}, "
-            f"got {k.size(2)}"
+            f"got {kv_cache.length}"
         )
 
 
@@ -233,9 +241,17 @@ def main():
 
     model = model.to(device)
 
-    check_prefill(model, x)
+    kv_caches = []
 
-    check_generation_correnctness(model, x)
+    for _ in range(8):
+        kv_cache = create_kv_cache(
+            B, 8, 1000, 64, device, torch.float32,
+        )
+        kv_caches.append(kv_cache)
+
+    # check_prefill(model, x, kv_caches)
+
+    check_generation_correnctness(model, x, kv_caches)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import time
 import torch
 
 from minigpt.model import MiniGPT
+from minigpt.attention import KVCache, create_kv_cache
 
 
 @torch.inference_mode()
@@ -9,6 +10,7 @@ def benchmark_length(
     model: MiniGPT,
     T: int,
     vocab_size: int,
+    kv_caches: list[KVCache],
     device,
 ):
     B = 1
@@ -27,7 +29,7 @@ def benchmark_length(
 
     full_tokens = torch.cat([prompt, next_token], dim=1)
 
-    _, _, kv_cache = model(prompt, use_cache=True)
+    _, _, kv_caches = model(prompt, kv_caches=kv_caches, use_cache=True)
 
     def prefill_fn():
         model(prompt, use_cache=True)
@@ -36,7 +38,10 @@ def benchmark_length(
         model(full_tokens, use_cache=True)
 
     def decode_fn():
-        model(next_token, past_key_values=kv_cache, use_cache=True)
+        for cache in kv_caches:
+            cache.length = T
+
+        model(next_token, kv_caches=kv_caches, use_cache=True)
 
     prefill_ms = benchmark(prefill_fn)
     naive_ms = benchmark(naive_fn)
@@ -87,10 +92,17 @@ def main():
 
         model = model.to("cuda")
 
+        kv_caches = []
+
+        for _ in range(8):
+            kv_cache = create_kv_cache(1, 8, 1000, 64, "cuda", torch.float32)
+            kv_caches.append(kv_cache)
+
         result = benchmark_length(
             model=model,
             T=T,
             vocab_size=model.vocab_size,
+            kv_caches=kv_caches,
             device="cuda",
         )
 

@@ -4,6 +4,45 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from dataclasses import dataclass
+
+
+@dataclass
+class KVCache:
+    k: Tensor
+    v: Tensor
+    length: int
+
+
+def create_kv_cache(
+    batch_size,
+    n_head,
+    block_size,
+    head_size,
+    device,
+    dtype,
+):
+    shape = (
+        batch_size,
+        n_head,
+        block_size,
+        head_size,
+    )
+
+    return KVCache(
+        k = torch.empty(
+            shape,
+            device=device,
+            dtype=dtype,
+        ),
+        v = torch.empty(
+            shape,
+            device=device,
+            dtype=dtype,
+        ),
+        length=0,
+    )
+
 
 class KVCacheCausalSelfAttention(nn.Module):
     def __init__(
@@ -49,12 +88,12 @@ class KVCacheCausalSelfAttention(nn.Module):
     def forward(
         self,
         x: Tensor,
-        past_kv: tuple[Tensor, Tensor] | None = None,
+        kv_cache: KVCache | None = None,
         use_cache: bool = False,
     ):
         B, T, C = x.shape
 
-        past_len = 0 if past_kv is None else past_kv[0].size(2)
+        past_len = 0 if kv_cache is None else kv_cache.length
 
         if past_len + T > self.block_size:
             raise ValueError(
@@ -69,24 +108,26 @@ class KVCacheCausalSelfAttention(nn.Module):
             for t in (q, k, v)
         )
         
-        if past_kv is not None:
-            past_k, past_v = past_kv
+        if kv_cache is not None:
+            start = kv_cache.length
+            end = start + T
 
-            k = torch.cat(
-                [past_k, k],
-                dim=2,
-            )
+            kv_cache.k[:, :, start:end, :].copy_(k)
+            kv_cache.v[:, :, start:end, :].copy_(v)
 
-            v = torch.cat(
-                [past_v, v],
-                dim=2,
-            )
+            k_all = kv_cache.k[:, :, :end, :]
+            v_all = kv_cache.v[:, :, :end, :]
 
-        wei = q @ k.transpose(-2, -1)
+            kv_cache.length = end
+        else:
+            k_all = k
+            v_all = v
+
+        wei = q @ k_all.transpose(-2, -1)
 
         wei = wei * (self.head_size ** (-0.5))
 
-        if past_kv is None or T > 1:
+        if kv_cache is None or T > 1:
         
             causal_mask = self.tril[
                 past_len:past_len + T,
@@ -102,7 +143,7 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         wei = self.attn_dropout(wei)
 
-        out = wei @ v
+        out = wei @ v_all
 
         out = out.transpose(1, 2).contiguous().view(B, T, C)
 
@@ -110,6 +151,6 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         out = self.resid_dropout(out)
 
-        present_kv = (k, v) if use_cache else None
+        present_kv = kv_cache if use_cache else None
         
         return out, present_kv

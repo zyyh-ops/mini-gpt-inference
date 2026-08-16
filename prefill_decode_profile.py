@@ -1,4 +1,5 @@
 from minigpt.model import MiniGPT
+from minigpt.attention import KVCache, create_kv_cache
 
 import torch
 from torch.profiler import (
@@ -60,6 +61,12 @@ def main():
         n_layer=8,
     ).to(device)
 
+    kv_caches = []
+
+    for _ in range(8):
+        kv_cache = create_kv_cache(1, 8, 1024, 64, device, torch.float32)
+        kv_caches.append(kv_cache)
+
     prompt = torch.randint(
         0, 1024,
         (B, T),
@@ -79,8 +86,9 @@ def main():
 
     with torch.inference_mode():
 
-        _, _, kv_cache = model(
+        _, _, kv_caches = model(
             prompt,
+            kv_caches=kv_caches,
             use_cache=True,
         )
 
@@ -93,7 +101,7 @@ def main():
         def decode_fn():
             model(
                 next_token,
-                past_key_values=kv_cache,
+                kv_caches=kv_caches,
                 use_cache=True,
             )
 

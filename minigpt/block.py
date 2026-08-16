@@ -1,6 +1,6 @@
 from torch import nn, Tensor
 
-from minigpt.attention import KVCacheCausalSelfAttention
+from minigpt.attention import KVCacheCausalSelfAttention, KVCache
 from minigpt.feed_forward import FeedForward
 
 class TransformerBlock(nn.Module):
@@ -30,12 +30,12 @@ class TransformerBlock(nn.Module):
     def forward(
         self, 
         x: Tensor,
-        past_kv: tuple[Tensor, Tensor] | None = None,
+        kv_cache: KVCache | None = None,
         use_cache: bool = False,
     ) -> Tensor:
         attn_out, present_kv = self.attn(
             self.layer_norm_1(x),
-            past_kv=past_kv,
+            kv_cache=kv_cache,
             use_cache=use_cache,
         )
 
