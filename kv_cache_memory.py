@@ -16,6 +16,7 @@ def kv_cache_bytes(
     )
 
 
+@torch.inference_mode()
 def measure_decode_memory(
     model: MiniGPT,
     kv_caches: list[KVCache],
@@ -108,61 +109,63 @@ def main():
 
     capcacity = 1024
 
-    for T in [8, 16, 32, 64, 128, 256, 512, 768]:
-        logical = (2 * 1 * 8 * T * 512 * 4)
+    with torch.inference_mode():
 
-        utilization = T / capcacity
+        for T in [8, 16, 32, 64, 128, 256, 512, 768]:
+            # logical = (2 * 1 * 8 * T * 512 * 4)
 
-        print(
-            f"T={T:4d} "
-            f"logical={logical / 1024**2:8.2f} MiB "
-            f"physcial={physical / 1024**2:8.2f} MiB "
-            f"util={utilization * 100:6.2f}%"
-        )
+            # utilization = T / capcacity
+
+            # print(
+            #     f"T={T:4d} "
+            #     f"logical={logical / 1024**2:8.2f} MiB "
+            #     f"physcial={physical / 1024**2:8.2f} MiB "
+            #     f"util={utilization * 100:6.2f}%"
+            # )
 
 
-        for cache in kv_caches:
-            cache.length = 0
+            for cache in kv_caches:
+                cache.length = 0
 
-        prompt = torch.randint(
-            0, 1024,
-            (1, T),
-            device="cuda",
-        )
+            prompt = torch.randint(
+                0, 1024,
+                (1, T),
+                device="cuda",
+            )
 
-        next_token = torch.randint(
-            0, 1024,
-            (1, 1),
-            device="cuda",
-        )
+            next_token = torch.randint(
+                0, 1024,
+                (1, 1),
+                device="cuda",
+            )
 
-        prefill_result = model(
-            prompt,
-            kv_caches=kv_caches,
-        )
+            prefill_result = model(
+                prompt,
+                kv_caches=kv_caches,
+            )
 
-        del prefill_result
+            del prefill_result
 
-        torch.cuda.synchronize()
+            torch.cuda.synchronize()
 
-        assert all(
-            cache.length == T
-            for cache in kv_caches
-        )
+            assert all(
+                cache.length == T
+                for cache in kv_caches
+            )
 
-        stats = measure_decode_memory(
-            model,
-            kv_caches,
-            next_token,
-        )
+            stats = measure_decode_memory(
+                model,
+                kv_caches,
+                next_token,
+            )
 
-        print(
-            f"T={T:4d} "
-            f"baseline={mib(stats['baseline']):8.2f} MiB "
-            f"temp_peak={mib(stats['temporary_peak']):8.4f} MiB "
-            f"live_output={mib(stats['live_output']):8.4f} MiB "
-            f"net_after_cleanup={mib(stats['net_after_cleanup']):8.4f} MiB "
-        )
+            print(
+                f"T={T:4d} "
+                f"baseline={mib(stats['baseline']):8.2f} MiB "
+                f"temp_peak={mib(stats['temporary_peak']):8.4f} MiB "
+                f"live_output={mib(stats['live_output']):8.4f} MiB "
+                f"net_after_cleanup={mib(stats['net_after_cleanup']):8.4f} MiB "
+            )
 
 
 if __name__ == "__main__":
