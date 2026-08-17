@@ -89,7 +89,6 @@ class KVCacheCausalSelfAttention(nn.Module):
         self,
         x: Tensor,
         kv_cache: KVCache | None = None,
-        use_cache: bool = False,
     ):
         B, T, C = x.shape
 
@@ -100,6 +99,15 @@ class KVCacheCausalSelfAttention(nn.Module):
                 f"sequence length {past_len + T} exceeds "
                 f"block_size {self.block_size}"
             )
+
+        if kv_cache is not None:
+            end = kv_cache.length + T
+
+            if end > kv_cache.k.size(2):
+                raise ValueError(
+                    f"KV cache capacity exceeded: "
+                    f"end={end}, capacity={kv_cache.k.size(2)}"
+                )
 
         q, k, v = self.qkv(x).chunk(3, dim=-1)
 
@@ -150,7 +158,5 @@ class KVCacheCausalSelfAttention(nn.Module):
         out = self.project(out)
 
         out = self.resid_dropout(out)
-
-        present_kv = kv_cache if use_cache else None
         
-        return out, present_kv
+        return out

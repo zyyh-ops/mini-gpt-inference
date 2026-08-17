@@ -56,15 +56,17 @@ class MiniGPT(nn.Module):
         self,
         idx: Tensor,
         kv_caches: list[KVCache] | None = None,
-        use_cache: bool = False,
         targets: Tensor | None = None
     ):
         B, T = idx.shape
 
-        if T > self.block_size:
-            raise ValueError(f"{T} must be smaller than {self.block_size}")
-
         past_len = kv_caches[0].length if kv_caches is not None else 0
+
+        if past_len + T > self.block_size:
+            raise ValueError(
+                f"sequence length {past_len + T} "
+                f"exceeds block_size {self.block_size}"
+            )
 
         positions = torch.arange(past_len, past_len + T, device=idx.device)
 
@@ -74,9 +76,7 @@ class MiniGPT(nn.Module):
 
         x = position_embeddings + token_embeddings
 
-        present_key_values = [] if use_cache else None
-
-        for idx, block in enumerate(self.blocks):
+        for layer_idx, block in enumerate(self.blocks):
             should_checkpoint = (
                 self.enable_activation_checkpointing
                 and self.training
@@ -93,19 +93,15 @@ class MiniGPT(nn.Module):
                 continue
 
             past_kv_cache = (
-                kv_caches[idx]
+                kv_caches[layer_idx]
                 if kv_caches is not None
                 else None
             )
 
-            x, present_kv = block(
+            x = block(
                 x,
                 kv_cache=past_kv_cache,
-                use_cache=use_cache,
             )
-
-            if use_cache:
-                present_key_values.append(present_kv)
                 
 
         x = self.layer_norm(x)
@@ -123,4 +119,4 @@ class MiniGPT(nn.Module):
 
             loss = F.cross_entropy(logits_flat, targets_flat)
 
-        return logits, loss, present_key_values
+        return logits, loss

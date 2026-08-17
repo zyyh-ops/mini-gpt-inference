@@ -29,19 +29,19 @@ def benchmark_length(
 
     full_tokens = torch.cat([prompt, next_token], dim=1)
 
-    _, _, kv_caches = model(prompt, kv_caches=kv_caches, use_cache=True)
+    model(prompt, kv_caches=kv_caches)
 
     def prefill_fn():
-        model(prompt, use_cache=True)
+        model(prompt)
 
     def naive_fn():
-        model(full_tokens, use_cache=True)
+        model(full_tokens)
 
     def decode_fn():
         for cache in kv_caches:
             cache.length = T
 
-        model(next_token, kv_caches=kv_caches, use_cache=True)
+        model(next_token, kv_caches=kv_caches)
 
     prefill_ms = benchmark(prefill_fn)
     naive_ms = benchmark(naive_fn)

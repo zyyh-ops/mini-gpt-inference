@@ -70,14 +70,14 @@ def main():
     prompt = torch.randint(
         0, 1024,
         (B, T),
-        device=device
-    ).to(device)
+        device=device,
+    )
 
     next_token = torch.randint(
         0, 1024,
         (B, 1),
         device=device,
-    ).to(device)
+    )
 
     full_tokens = torch.cat(
         [prompt, next_token],
@@ -86,23 +86,23 @@ def main():
 
     with torch.inference_mode():
 
-        _, _, kv_caches = model(
+        model(
             prompt,
             kv_caches=kv_caches,
-            use_cache=True,
         )
 
         def naive_fn():
             model(
                 full_tokens,
-                use_cache=False,
             )
 
         def decode_fn():
+            for cache in kv_caches:
+                cache.length = T
+
             model(
                 next_token,
                 kv_caches=kv_caches,
-                use_cache=True,
             )
 
         profile_fn(
@@ -112,7 +112,7 @@ def main():
 
         profile_fn(
             "cached_decode_t256",
-            decode_fn
+            decode_fn,
         )
 
 

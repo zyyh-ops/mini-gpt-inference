@@ -36,15 +36,11 @@ def check_prefill(
 ):
     model.eval()
 
-    naive_logits, _, _ = model(
-        input_ids,
-        use_cache=False,
-    )
+    naive_logits, _ = model(input_ids)
 
-    cached_logits, _, kv_caches = model(
-        input_ids,
+    cached_logits, _ = model(
+        input_ids, 
         kv_caches=kv_caches,
-        use_cache=True,
     )
 
     print("=== Prefill ===")
@@ -76,15 +72,13 @@ def check_generation_correnctness(
 
     tokens = input_ids.clone()
 
-    naive_logits, _, _ = model(
+    naive_logits, _ = model(
         tokens,
-        use_cache=False,
     )
 
-    cached_logits, _, kv_caches = model(
+    cached_logits, _ = model(
         tokens,
         kv_caches=kv_caches,
-        use_cache=True,
     )
 
     print("=" * 80)
@@ -183,15 +177,13 @@ def check_generation_correnctness(
         if step == max_new_tokens - 1:
             break
 
-        naive_logits, _, _ = model(
+        naive_logits, _ = model(
             tokens,
-            use_cache=False,
         )
 
-        cached_logits, _, kv_caches = model(
+        cached_logits, _ = model(
             next_token,
             kv_caches=kv_caches,
-            use_cache=True,
         )
 
         check_cache_length(kv_caches, tokens.size(-1))
@@ -228,8 +220,6 @@ def main():
         device="cuda",
     )
 
-    x = x.to(device)
-
     model = MiniGPT(
         n_embd=512,
         n_head=8,
@@ -237,9 +227,7 @@ def main():
         block_size=1000,
         dropout=0.0,
         n_layer=8,
-    )
-
-    model = model.to(device)
+    ).to(device)
 
     kv_caches = []
 

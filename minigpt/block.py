@@ -31,15 +31,10 @@ class TransformerBlock(nn.Module):
         self, 
         x: Tensor,
         kv_cache: KVCache | None = None,
-        use_cache: bool = False,
     ) -> Tensor:
-        attn_out, present_kv = self.attn(
-            self.layer_norm_1(x),
-            kv_cache=kv_cache,
-            use_cache=use_cache,
-        )
 
-        x = x + attn_out
+        x = x + self.attn(self.layer_norm_1(x), kv_cache=kv_cache)
+
         x = x + self.ffn(self.layer_norm_2(x))
 
-        return x, present_kv
+        return x
