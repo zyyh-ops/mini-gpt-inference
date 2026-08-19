@@ -96,11 +96,11 @@ def prefill_request(
         raise ValueError("max_new_tokens must be positive")
 
     kv_caches = create_request_kv_caches(
-        deivce=device,
-        dtyp=next(model.parameters()).dtype,
+        device=device,
+        dtype=next(model.parameters()).dtype,
     )
 
-    logits, _, _ = model(
+    logits, _, = model(
         prompt_ids,
         kv_caches=kv_caches,
     )
@@ -138,164 +138,279 @@ def decode_one_step(
 
     before_len = get_cache_length(state)
 
-    logits, _, _ = model(
+    logits, _ = model(
         state.currect_token,
         kv_caches=state.kv_caches,
     )
 
     after_len = get_cache_length(state)
 
+    assert after_len == before_len + 1, (
+        f"{state.request_id}: "
+        f"cache should grow "
+        f"{before_len} -> {before_len + 1}, "
+        f"but got {after_len}"
+    )
 
-def simulate_continuous_batch(
-    requests,
-    max_batch_size,
+    next_token = torch.argmax(
+        logits[:, -1, :],
+        dim=-1,
+        keepdim=True,
+    )
+
+    state.currect_token = next_token
+
+    state.generated_tokens.append(next_token.item())
+
+    state.remaining_decode_tokens -= 1
+
+    if state.remaining_decode_tokens == 0:
+        state.finished = True
+
+
+@torch.inference_mode()
+def generate_standalone(
+    model: MiniGPT,
+    prompt_ids: Tensor,
+    max_new_tokens: int,
+    device: str,
+) -> list[int]:
+    state = prefill_request(
+        model=model,
+        request_id="standalone",
+        prompt_ids=prompt_ids,
+        max_new_tokens=max_new_tokens,
+        device=device,
+    )
+
+    while not state.finished:
+        decode_one_step(model, state)
+
+    return state.generated_tokens
+
+
+@torch.inference_mode()
+def run_multi_request_reference(
+    model: MiniGPT,
+    states: list[SequenceState],
+    max_batch_size: int,
 ):
-    future = sorted(
-        deepcopy(requests),
-        key=lambda r: r.arrival_time,
-    )
+    waiting = [
+        state
+        for state in states
+        if not state.finished
+    ]
 
-    waiting = []
-    active = []
+    active: list[SequenceState] = []
 
-    currect_time = 0
+    iteration = 0
 
-    total_active_slots = 0
-    total_capacity_slots = 0
-
-    finished_requests = []
-
-    while future or waiting or active:
-
+    def admit_requests():
         while(
-            future
-            and future[0].arrival_time <= currect_time
+            len(active) < max_batch_size and waiting
         ):
-            waiting.append(future.pop(0))
+            active.append(waiting.pop(0))
 
-        while(
-            len(active) < max_batch_size
-            and waiting
-        ):
-            req = waiting.pop(0)
+    admit_requests()
 
-            if req.first_scheduled_time is None:
-                req.first_scheduled_time = currect_time
-
-            active.append(req)
-
-        if not active:
-            if future:
-                currect_time = future[0].arrival_time
-                continue
-
-            break
-
+    while active:
+        print()
+        print("=" * 80)
         print(
-            f"t={currect_time:02d} "
+            f"iteration={iteration:02d} "
             f"active="
-            f"{[r.request_id for r in active]}"
+            f"{[s.request_id for s in active]}"
         )
+        print("=" * 80)
 
-        total_active_slots += len(active)
-        total_capacity_slots += max_batch_size
+        before_lengths = {
+            state.request_id:
+            get_cache_length(state)
+            for state in states
+        }
 
-        for req in active:
-            req.remaining_tokens -= 1
+        for state in active:
+            decode_one_step(model, state)
 
-            if req.first_token_time is None:
-                req.first_token_time = currect_time + 1
+            print(
+                f"{state.request_id}: "
+                f"token={state.generated_tokens[-1]:4d} "
+                f"cache_len={get_cache_length(state):4d} "
+                f"remaining={state.remaining_decode_tokens:2d}"
+            )
 
-        still_active = []
+        active_ids = {
+            state.request_id
+            for state in active
+        }
 
-        for req in active:
-            if req.remaining_tokens == 0:
-                req.finish_time = currect_time + 1
-                finished_requests.append(req)
+        for state in states:
+            before = before_lengths[state.request_id]
+
+            after = get_cache_length(state)
+
+            if state.request_id in active_ids:
+                assert after == before + 1, (
+                    f"{state.request_id}: "
+                    f"active cache didn't grow correctly"
+                )
+
             else:
-                still_active.append(req)
+                assert after == before, (
+                    f"{state.request_id}: "
+                    f"inactive cache was modified "
+                    f"{before} -> {after}" 
+                )
 
-        active = still_active
+        finished_now = [
+            state
+            for state in states
+            if state.finished
+        ]
 
-        currect_time += 1
+        if finished_now:
+            print(
+                "finished:",
+                [state.request_id for state in finished_now],
+            )
 
-    return {
-        "total_time": currect_time,
-        "utilization": (
-            total_active_slots
-            / total_capacity_slots
-        ),
-        "requests": finished_requests,
-    }
+        active = [
+            state
+            for state in active
+            if not state.finished
+        ]
 
+        admit_requests()
 
-def print_serving_summary(name, result):
-    print()
-    print("=" * 80)
-    print(name)
-    print("=" * 80)
-
-    for req in sorted(
-        result["requests"],
-        key=lambda r: r.request_id,
-    ):
-        queue_delay = (
-            req.first_scheduled_time
-            - req.arrival_time
-        )
-
-        ttft = (
-            req.first_token_time
-            - req.arrival_time
-        )
-
-        e2e = (
-            req.finish_time
-            - req.arrival_time
-        )
-
-        print(
-            f"{req.request_id}: "
-            f"arrival={req.arrival_time:2d} "
-            f"first_schedule={req.first_scheduled_time:2d} "
-            f"first_token={req.first_token_time:2d} "
-            f"finish={req.finish_time:2d} "
-            f"queue={queue_delay:2d} "
-            f"TTFT={ttft:2d} "
-            f"E2E={e2e:2d}"
-        )
-
-    print()
-    print(
-        f"total time      : "
-        f"{result['total_time']}"
-    )
-
-    print(
-        f"slot utilization : "
-        f"{result['utilization'] * 100:.2f}%"
-    )
+        iteration += 1
 
 
 def main():
-    requests = [
-        Request("A", arrival_time=0, remaining_tokens=4),
-        Request("B", arrival_time=0, remaining_tokens=8),
-        Request("C", arrival_time=2, remaining_tokens=3),
-        Request("D", arrival_time=4, remaining_tokens=5),
-        Request("E", arrival_time=6, remaining_tokens=2),
-    ]
+    torch.manual_seed(42)
 
-    max_batch_size = 2
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    continuous = simulate_continuous_batch(
-        requests, max_batch_size,
+    model = MiniGPT(
+        n_embd=N_EMBD,
+        n_head=N_HEAD,
+        vocab_size=VOCAB_SIZE,
+        block_size=BLOCK_SIZE,
+        dropout=0.0,
+        n_layer=N_LAYER,
+    ).to(device)
+
+    model.eval()
+
+    prompts = {
+        "A": torch.tensor(
+            [[10, 11, 12, 13]],
+            device=device,
+        ),
+
+        "B": torch.tensor(
+            [[20, 21, 22, 23]],
+            device=device,
+        ),
+
+        "C": torch.tensor(
+            [[30, 31, 32]],
+            device=device,
+        ),
+
+        "D": torch.tensor(
+            [[40, 41, 42, 43, 44, 45]],
+            device=device,
+        ),
+    }
+
+    max_new_tokens = {
+        "A": 4,
+        "B": 8,
+        "C": 3,
+        "D": 5,
+    }
+
+    standalone_results = {}
+
+    print()
+    print("=" * 80)
+    print("Standalone Ground Truth")
+    print("=" * 80)
+
+    for request_id, prompt in prompts.items():
+
+        tokens = generate_standalone(
+            model=model,
+            prompt_ids=prompt,
+            max_new_tokens=max_new_tokens[request_id],
+            device=device,
+        )
+
+        standalone_results[request_id] = tokens
+
+        print(
+            f"{request_id}: "
+            f"{tokens}"
+        )
+
+
+    states = []
+
+    for request_id, prompt in prompts.items():
+
+        state = prefill_request(
+            model=model,
+            request_id=request_id,
+            prompt_ids=prompt,
+            max_new_tokens=max_new_tokens[request_id],
+            device=device,
+        )
+
+        states.append(state)
+
+    check_cache_storage_isolation(states)
+
+    print()
+    print("KV storage isolation: PASS")
+
+    run_multi_request_reference(
+        model=model,
+        states=states,
+        max_batch_size=MAX_BATCH_SIZE,
     )
-    
-    print_serving_summary(
-        "Serving Summary",
-        continuous,
-    )
+
+    print()
+    print("=" * 80)
+    print("Final Correctness")
+    print("=" * 80)
+
+    all_ok = True
+
+    for state in states:
+
+        reference = standalone_results[state.request_id]
+
+        scheduled = state.generated_tokens
+
+        ok = (reference == scheduled)
+
+        all_ok &= ok
+
+        print(
+            f"{state.request_id}: "
+            f"standalone={reference} "
+            f"scheduled={scheduled} "
+            f"equal={ok}"
+        )
+
+    print()
+
+    if all_ok:
+        print("All multi-request correctness checks passed.")
+    else:
+        raise RuntimeError(
+            "Multi-request correctness failed"
+        )
 
 
 if __name__ == "__main__":
