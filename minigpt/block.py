@@ -2,6 +2,8 @@ from torch import nn, Tensor
 
 from minigpt.attention import KVCacheCausalSelfAttention, KVCache
 from minigpt.feed_forward import FeedForward
+from minivllm.kv_runtime import KVRuntimeContext
+
 
 class TransformerBlock(nn.Module):
     def __init__(
@@ -27,13 +29,13 @@ class TransformerBlock(nn.Module):
 
         self.layer_norm_2 = nn.LayerNorm(n_embd)
 
-    def forward(
+    def forward_decode(
         self, 
         x: Tensor,
-        kv_cache: KVCache | None = None,
+        kv_context: KVRuntimeContext,
     ) -> Tensor:
 
-        x = x + self.attn(self.layer_norm_1(x), kv_cache=kv_cache)
+        x = x + self.attn(self.layer_norm_1(x), kv_context=kv_context)
 
         x = x + self.ffn(self.layer_norm_2(x))
 

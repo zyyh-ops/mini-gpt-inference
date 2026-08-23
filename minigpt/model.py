@@ -6,6 +6,7 @@ from torch.utils.checkpoint import checkpoint
 
 from minigpt.block import TransformerBlock
 from minigpt.attention import KVCache
+from minivllm.kv_runtime import KVRuntimeContext
 
 class MiniGPT(nn.Module):
     def __init__(
@@ -23,6 +24,8 @@ class MiniGPT(nn.Module):
         self.block_size = block_size
 
         self.vocab_size = vocab_size
+
+        self.n_layer = n_layer
 
         self.token_embedding_table = nn.Embedding(
             num_embeddings=vocab_size,
@@ -120,3 +123,27 @@ class MiniGPT(nn.Module):
             loss = F.cross_entropy(logits_flat, targets_flat)
 
         return logits, loss
+
+    def decode(
+        self,
+        input_ids: torch.Tensor,
+        contexts: list[KVRuntimeContext],
+    ):
+        x = (
+            self.token_embedding_table(input_ids)
+            + self.position_embedding_table(input_ids)
+        )
+
+        for layer_idx, block in enumerate(self.blocks):
+
+            ctx = contexts[layer_idx]
+
+            x = block.forward_decode(
+                x, ctx
+            )
+
+        x = self.layer_norm(x)
+
+        logits = self.language_model_head(x)
+
+        return logits

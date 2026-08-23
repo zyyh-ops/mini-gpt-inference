@@ -54,7 +54,7 @@ class BlockManager:
     def append_slot(
         self,
         seq: SequenceState,
-    ) -> tuple[int, int, int]:
+    ):
         logical_pos = seq.length
 
         logical_block = logical_pos // self.block_size

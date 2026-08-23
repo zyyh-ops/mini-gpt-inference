@@ -5,6 +5,8 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from dataclasses import dataclass
+from minivllm.kv_runtime import KVRuntimeContext
+from paged_attention_v1_reference import paged_attention_online
 
 
 @dataclass
@@ -50,6 +52,7 @@ class KVCacheCausalSelfAttention(nn.Module):
         n_embd: int,
         n_head: int,
         block_size: int,
+        context: KVRuntimeContext,
         dropout: float = 0.0,
     ):
         super().__init__()
@@ -63,6 +66,7 @@ class KVCacheCausalSelfAttention(nn.Module):
         self.n_head = n_head
         self.head_size = n_embd // n_head
         self.block_size = block_size
+        self.context = context
         self.dropout = dropout
 
         self.qkv = nn.Linear(
@@ -85,14 +89,14 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         self.resid_dropout = nn.Dropout(dropout)
 
-    def forward(
+    def forward_decode(
         self,
         x: Tensor,
-        kv_cache: KVCache | None = None,
+        kv_context: KVRuntimeContext | None = None,
     ):
         B, T, C = x.shape
 
-        past_len = 0 if kv_cache is None else kv_cache.length
+        past_len = 0 if kv_context is None else kv_context.seq_state.length
 
         if past_len + T > self.block_size:
             raise ValueError(
@@ -100,14 +104,8 @@ class KVCacheCausalSelfAttention(nn.Module):
                 f"block_size {self.block_size}"
             )
 
-        if kv_cache is not None:
-            end = kv_cache.length + T
-
-            if end > kv_cache.k.size(2):
-                raise ValueError(
-                    f"KV cache capacity exceeded: "
-                    f"end={end}, capacity={kv_cache.k.size(2)}"
-                )
+        if kv_context is not None:
+            end = kv_context.seq_state.length + T
 
         q, k, v = self.qkv(x).chunk(3, dim=-1)
 
@@ -115,48 +113,26 @@ class KVCacheCausalSelfAttention(nn.Module):
             t.view(B, T, self.n_head, self.head_size).transpose(1, 2)
             for t in (q, k, v)
         )
-        
-        if kv_cache is not None:
-            start = kv_cache.length
-            end = start + T
 
-            kv_cache.k[:, :, start:end, :].copy_(k)
-            kv_cache.v[:, :, start:end, :].copy_(v)
+        slot = self.context.block_manager.append_slot(
+            self.context.seq_state
+        )
 
-            k_all = kv_cache.k[:, :, :end, :]
-            v_all = kv_cache.v[:, :, :end, :]
+        physical_block = slot // self.context.block_manager.block_size
+        offset = slot % self.context.block_manager.block_size
 
-            kv_cache.length = end
-        else:
-            k_all = k
-            v_all = v
+        self.context.kv_pool.write(
+            physical_block=physical_block,
+            block_offset=offset,
+            k_new=k,
+            v_new=v,
+        )
 
-        wei = q @ k_all.transpose(-2, -1)
+        attention_out = paged_attention_online(
+            q=q,
+            pool=self.context.kv_pool,
+            seq=self.context.seq_state,
+            layer_idx=self.context.layer_idx,
+        )
 
-        wei = wei * (self.head_size ** (-0.5))
-
-        if kv_cache is None or T > 1:
-        
-            causal_mask = self.tril[
-                past_len:past_len + T,
-                :past_len + T,
-            ]
-
-            wei = wei.masked_fill(
-                causal_mask == 0,
-                float("-inf"),
-            )
-
-        wei = F.softmax(wei, dim=-1)
-
-        wei = self.attn_dropout(wei)
-
-        out = wei @ v_all
-
-        out = out.transpose(1, 2).contiguous().view(B, T, C)
-
-        out = self.project(out)
-
-        out = self.resid_dropout(out)
-        
-        return out
+        return attention_out

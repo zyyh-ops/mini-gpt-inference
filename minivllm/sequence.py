@@ -13,7 +13,9 @@ class SequenceState:
 
     max_tokens: int
 
-    # prompt_tokens: list[int]
+    prompt_tokens: list[int]
+
+    last_token: int
 
     generated_tokens: list[int] = field(default_factory=list)
 
