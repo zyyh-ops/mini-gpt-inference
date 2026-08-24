@@ -14,3 +14,10 @@ class KVRuntimeContext:
     kv_pool: KVBlockPool
 
     layer_idx: int
+
+    logical_pos: int
+    context_length: int
+
+    physical_block: int
+    block_offset: int
+    physical_slot: int

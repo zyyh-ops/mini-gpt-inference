@@ -51,7 +51,7 @@ class BlockManager:
         for _ in range(need_blocks):
             self._allocate_block(seq)
 
-    def append_slot(
+    def reserve_append_slot(
         self,
         seq: SequenceState,
     ):
@@ -73,9 +73,7 @@ class BlockManager:
             + block_offset
         )
 
-        seq.length += 1
-
-        return physcial_slot
+        return physcial_block, block_offset, physcial_slot
 
     def logical_to_slot(
         self,

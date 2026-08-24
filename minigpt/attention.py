@@ -52,7 +52,6 @@ class KVCacheCausalSelfAttention(nn.Module):
         n_embd: int,
         n_head: int,
         block_size: int,
-        context: KVRuntimeContext,
         dropout: float = 0.0,
     ):
         super().__init__()
@@ -66,7 +65,6 @@ class KVCacheCausalSelfAttention(nn.Module):
         self.n_head = n_head
         self.head_size = n_embd // n_head
         self.block_size = block_size
-        self.context = context
         self.dropout = dropout
 
         self.qkv = nn.Linear(
@@ -96,16 +94,8 @@ class KVCacheCausalSelfAttention(nn.Module):
     ):
         B, T, C = x.shape
 
-        past_len = 0 if kv_context is None else kv_context.seq_state.length
-
-        if past_len + T > self.block_size:
-            raise ValueError(
-                f"sequence length {past_len + T} exceeds "
-                f"block_size {self.block_size}"
-            )
-
-        if kv_context is not None:
-            end = kv_context.seq_state.length + T
+        assert B == 1
+        assert T == 1
 
         q, k, v = self.qkv(x).chunk(3, dim=-1)
 
@@ -114,25 +104,106 @@ class KVCacheCausalSelfAttention(nn.Module):
             for t in (q, k, v)
         )
 
-        slot = self.context.block_manager.append_slot(
-            self.context.seq_state
-        )
+        q = q[0, :, 0, :]
+        k = k[0, :, 0, :]
+        v = v[0, :, 0, :]
 
-        physical_block = slot // self.context.block_manager.block_size
-        offset = slot % self.context.block_manager.block_size
 
-        self.context.kv_pool.write(
-            physical_block=physical_block,
-            block_offset=offset,
+        self.context.kv_pool.write_layer(
+            layer_idx=kv_context.layer_idx,
+            physical_block=kv_context.physical_block,
+            block_offset=kv_context.block_offset,
             k_new=k,
             v_new=v,
         )
 
         attention_out = paged_attention_online(
             q=q,
-            pool=self.context.kv_pool,
-            seq=self.context.seq_state,
-            layer_idx=self.context.layer_idx,
+            pool=kv_context.kv_pool,
+            seq=kv_context.seq_state,
+            layer_idx=kv_context.layer_idx,
+            context_length=kv_context.context_length,
         )
 
+        attention_out = attention_out.reshape(1, 1, self.n_embd)
+
+        attention_out = self.project(attention_out)
+
+        attention_out = self.resid_dropout(attention_out)
+
         return attention_out
+
+    def forward(
+        self,
+        x: Tensor,
+        kv_cache: KVCache | None = None,
+    ):
+        B, T, C = x.shape
+
+        past_len = 0 if kv_cache is None else kv_cache.length
+
+        if past_len + T > self.block_size:
+            raise ValueError(
+                f"sequence length {past_len + T} exceeds "
+                f"block_size {self.block_size}"
+            )
+
+        if kv_cache is not None:
+            end = kv_cache.length + T
+
+            if end > kv_cache.k.size(2):
+                raise ValueError(
+                    f"KV cache capacity exceeded: "
+                    f"end={end}, capacity={kv_cache.k.size(2)}"
+                )
+
+        q, k, v = self.qkv(x).chunk(3, dim=-1)
+
+        q, k, v = (
+            t.view(B, T, self.n_head, self.head_size).transpose(1, 2)
+            for t in (q, k, v)
+        )
+
+        if kv_cache is not None:
+            start = kv_cache.length
+            end = start + T
+
+            kv_cache.k[:, :, start:end, :].copy_(k)
+            kv_cache.v[:, :, start:end, :].copy_(v)
+
+            k_all = kv_cache.k[:, :, :end, :]
+            v_all = kv_cache.v[:, :, :end, :]
+
+            kv_cache.length = end
+        else:
+            k_all = k
+            v_all = v
+
+        wei = q @ k_all.transpose(-2, -1)
+
+        wei = wei * (self.head_size ** (-0.5))
+
+        if kv_cache is not None or T > 1:
+            causal_mask = self.tril[
+                past_len: past_len + T,
+                :past_len + T,
+            ]
+
+            wei = wei.masked_fill(
+                causal_mask == 0,
+                float("-inf"),
+            )
+
+        wei = F.softmax(wei, dim=-1)
+
+        wei = self.attn_dropout(wei)
+
+        out = wei @ v_all
+
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
+
+        out = self.project(out)
+
+        out = self.resid_dropout(out)
+
+        return out

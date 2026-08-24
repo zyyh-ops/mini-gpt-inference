@@ -35,8 +35,16 @@ class TransformerBlock(nn.Module):
         kv_context: KVRuntimeContext,
     ) -> Tensor:
 
-        x = x + self.attn(self.layer_norm_1(x), kv_context=kv_context)
+        x = x + self.attn.forward_decode(self.layer_norm_1(x), kv_context=kv_context)
 
         x = x + self.ffn(self.layer_norm_2(x))
 
         return x
+
+    def forward(
+        self,
+        x: Tensor,
+    ) -> Tensor:
+        x = x + self.attn(self.layer_norm_1(x))
+
+        out = x + self.ffn(self.layer_norm_2(x))

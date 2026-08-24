@@ -133,6 +133,7 @@ def paged_attention_online(
     pool: KVBlockPool,
     seq: SequenceState,
     layer_idx: int,
+    context_length: int,
 ):
     import math
 
@@ -152,7 +153,7 @@ def paged_attention_online(
     for logical_block, physical_block in enumerate(seq.block_table):
         logic_start = logical_block * pool.block_size
 
-        remaining = seq.length - logic_start
+        remaining = context_length - logic_start
 
         valid_tokens = min(pool.block_size, remaining)
 

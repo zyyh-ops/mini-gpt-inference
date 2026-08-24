@@ -24,11 +24,14 @@ class ModelRunner:
         self,
         seq: SequenceState,
     ):
-        input_id = torch.tensor(
-            [
-                [seq.last_token]
-            ]
-        )
+        (
+            physical_block,
+            block_offset,
+            physical_slot,
+        ) = self.block_manager.reserve_append_slot(seq)
+
+        logical_pos = seq.length
+        context_length = seq.length + 1
 
         contexts = []
 
@@ -38,15 +41,34 @@ class ModelRunner:
                     seq_state=seq,
                     block_manager=self.block_manager,
                     kv_pool=self.kv_pool,
+
                     layer_idx=layer_idx,
+
+                    logical_pos=logical_pos,
+                    context_length=context_length,
+
+                    physical_block=physical_block,
+                    block_offset=block_offset,
+                    physical_slot=physical_slot,
                 )
             )
 
+        device = next(self.model.parameters()).device
+
+        input_ids = torch.Tensor(
+            [[seq.last_token]],
+            device=device,
+            dtype=torch.long,
+        )
+
         logits = self.model.decode(
-            input_ids=input_id,
+            input_ids=input_ids,
             contexts=contexts,
         )
+
+        seq.length += 1
 
         next_token = torch.argmax(logits[:, -1], dim=-1)
 
         return next_token.item()
+    

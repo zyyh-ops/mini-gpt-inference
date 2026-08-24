@@ -84,6 +84,28 @@ class KVBlockPool:
 
         self.v[:, physical_block, block_offset, :, :].copy_(v_new)
 
+
+    def write_layer(
+        self,
+        layer_idx: int,
+        physical_block: int,
+        block_offset: int,
+        k_new: torch.Tensor,
+        v_new: torch.Tensor,
+    ):
+        self.k[
+            layer_idx,
+            physical_block,
+            block_offset,
+        ].copy_(k_new)
+
+        self.v[
+            layer_idx,
+            physical_block,
+            block_offset,
+        ].copy_(v_new)
+
+
     def gather_sequence(
         self,
         seq: SequenceState,

@@ -129,9 +129,19 @@ class MiniGPT(nn.Module):
         input_ids: torch.Tensor,
         contexts: list[KVRuntimeContext],
     ):
+        assert len(contexts) == self.n_layer
+        
+        position = contexts[0].logical_pos
+
+        positions = torch.tensor(
+            [[position]],
+            device=input_ids.device,
+            dtype=torch.long,
+        )
+        
         x = (
             self.token_embedding_table(input_ids)
-            + self.position_embedding_table(input_ids)
+            + self.position_embedding_table(positions)
         )
 
         for layer_idx, block in enumerate(self.blocks):
