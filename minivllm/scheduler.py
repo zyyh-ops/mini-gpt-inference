@@ -47,6 +47,8 @@ class Scheduler:
 
             self.block_manager.allocate(seq)
 
+            seq.initialize()
+
             seq.status = Status.RUNNING
 
             self.running.append(seq)

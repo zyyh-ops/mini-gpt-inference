@@ -1,6 +1,9 @@
 from scheduler import Scheduler
 from sequence import SequenceState
 from block_manager import BlockManager
+from model_runner import ModelRunner
+from model import MiniGPT
+from kv_block_pool import KVBlockPool
 
 
 class MiniRuntime:
@@ -8,7 +11,7 @@ class MiniRuntime:
         self,
         num_blocks,
         block_size,
-        max_running
+        max_running,
     ):
         self.block_manager = (
             BlockManager(
@@ -22,6 +25,25 @@ class MiniRuntime:
                 self.block_manager,
                 max_running,
             )
+        )
+
+        self.runner = ModelRunner(
+            model=MiniGPT(
+                n_embd=512,
+                n_head=8,
+                vocab_size=1024,
+                block_size=1024,
+                dropout=0.0,
+                n_layer=8,
+            ),
+            kv_pool=KVBlockPool(
+                n_layer=8,
+                num_blocks=num_blocks,
+                block_size=block_size,
+                n_head=8,
+                head_dim=64,
+            ),
+            block_manager=self.block_manager,
         )
 
         self.iteration = 0
@@ -49,9 +71,13 @@ class MiniRuntime:
         )
 
         for seq in active:
-            slot = self.block_manager.append_slot(seq)
+            _, _, slot = self.block_manager.reserve_append_slot(seq)
 
-            seq.generated_tokens.append(self.iteration)
+            next_token = self.runner.decode_one(seq)
+
+            seq.generated_tokens.append(next_token)
+
+            seq.last_token = next_token
 
             print(
                 seq.seq_id,
@@ -80,17 +106,20 @@ def main():
     )
 
     A = SequenceState(
-        "A",
+        seq_id="A",
+        prompt_tokens=[1, 2, 3],
         max_tokens=10,
     )
 
     B = SequenceState(
-        "B",
+        seq_id="B",
+        prompt_tokens=[5, 6, 7, 8],
         max_tokens=7,
     )
 
     C = SequenceState(
-        "C",
+        seq_id="C",
+        prompt_tokens=[9, 10, 11],
         max_tokens=12,
     )
 

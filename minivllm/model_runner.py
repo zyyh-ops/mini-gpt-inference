@@ -1,4 +1,4 @@
-from minigpt.model import MiniGPT
+from model import MiniGPT
 from kv_block_pool import KVBlockPool
 from block_manager import BlockManager
 from sequence import SequenceState
@@ -18,6 +18,13 @@ class ModelRunner:
         self.kv_pool = kv_pool
 
         self.block_manager = block_manager
+
+    def prefill(
+        self,
+        seq: SequenceState,
+    ):
+        input_ids = torch.tensor([seq.prompt_tokens])
+
 
 
     def decode_one(
@@ -55,7 +62,7 @@ class ModelRunner:
 
         device = next(self.model.parameters()).device
 
-        input_ids = torch.Tensor(
+        input_ids = torch.tensor(
             [[seq.last_token]],
             device=device,
             dtype=torch.long,

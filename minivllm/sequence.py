@@ -15,7 +15,7 @@ class SequenceState:
 
     prompt_tokens: list[int]
 
-    last_token: int
+    last_token: int = None
 
     generated_tokens: list[int] = field(default_factory=list)
 
@@ -27,3 +27,6 @@ class SequenceState:
 
     def is_finished(self):
         return self.length >= self.max_tokens
+
+    def initialize(self):
+        self.last_token = self.prompt_tokens[-1]

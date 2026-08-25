@@ -124,6 +124,7 @@ class MiniGPT(nn.Module):
 
         return logits, loss
 
+
     def decode(
         self,
         input_ids: torch.Tensor,
