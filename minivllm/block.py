@@ -29,6 +29,18 @@ class TransformerBlock(nn.Module):
 
         self.layer_norm_2 = nn.LayerNorm(n_embd)
 
+
+    def forward_prefill(
+        self,
+        x: Tensor,
+        kv_contexts: list[KVRuntimeContext],
+    ) -> Tensor:
+        x = x + self.attn.forward_prefill(self.layer_norm_1(x), kv_contexts)
+
+        x = x + self.ffn(self.layer_norm_2(x))
+
+        return x
+
     def forward_decode(
         self, 
         x: Tensor,

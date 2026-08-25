@@ -19,12 +19,23 @@ class ModelRunner:
 
         self.block_manager = block_manager
 
+
     def prefill(
         self,
         seq: SequenceState,
     ):
-        input_ids = torch.tensor([seq.prompt_tokens])
+        for token in seq.prompt_tokens:
+            seq.last_token = token
 
+            next_token = self.decode_one(seq)
+
+        # logits = self.model.prefill(input_ids, seq)
+
+        seq.last_token = next_token
+
+        seq.length = len(seq.prompt_tokens)
+
+        return next_token
 
 
     def decode_one(

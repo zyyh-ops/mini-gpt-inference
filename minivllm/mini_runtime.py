@@ -1,5 +1,5 @@
 from scheduler import Scheduler
-from sequence import SequenceState
+from sequence import SequenceState, Status
 from block_manager import BlockManager
 from model_runner import ModelRunner
 from model import MiniGPT
@@ -73,11 +73,21 @@ class MiniRuntime:
         for seq in active:
             _, _, slot = self.block_manager.reserve_append_slot(seq)
 
-            next_token = self.runner.decode_one(seq)
+            if seq.status == Status.WAITING:
 
-            seq.generated_tokens.append(next_token)
+                seq.status = Status.PREFILLING
 
-            seq.last_token = next_token
+                self.runner.prefill(seq)
+
+                seq.status = Status.RUNNING
+
+            elif seq.status == Status.RUNNING:
+
+                next_token = self.runner.decode_one(seq)
+
+                seq.generated_tokens.append(next_token)
+
+                seq.last_token = next_token
 
             print(
                 seq.seq_id,

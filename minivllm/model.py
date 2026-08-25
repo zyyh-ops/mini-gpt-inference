@@ -7,6 +7,7 @@ from torch.utils.checkpoint import checkpoint
 from block import TransformerBlock
 from attention import KVCache
 from kv_runtime import KVRuntimeContext
+from sequence import SequenceState
 
 class MiniGPT(nn.Module):
     def __init__(
@@ -123,6 +124,15 @@ class MiniGPT(nn.Module):
             loss = F.cross_entropy(logits_flat, targets_flat)
 
         return logits, loss
+
+
+    def prefill(
+        self,
+        input_ids: torch.Tensor,
+        seq: SequenceState,
+        kv_contexts: list[KVRuntimeContext],
+    ):
+        pass
 
 
     def decode(

@@ -87,6 +87,26 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         self.resid_dropout = nn.Dropout(dropout)
 
+    def forward_prefill(
+        self,
+        x: Tensor,
+        kv_contexts: list[KVRuntimeContext] | None = None,
+    ):
+        outputs = []
+
+        for t in range(x.shape[1]):
+            xt = x[:, t:t+1]
+
+            out = self.forward_decode(
+                xt, kv_contexts[t]
+            )
+
+            outputs.append(out)
+
+        return torch.cat(
+            outputs, dim=-1,
+        )
+
     def forward_decode(
         self,
         x: Tensor,

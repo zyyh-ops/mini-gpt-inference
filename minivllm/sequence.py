@@ -3,6 +3,7 @@ from enum import Enum
 
 class Status(Enum):
     WAITING = "waiting"
+    PREFILLING = "prefilling"
     RUNNING = "running"
     FINISHED = "finished"
 
@@ -14,6 +15,8 @@ class SequenceState:
     max_tokens: int
 
     prompt_tokens: list[int]
+
+    prompt_pos: int = 0
 
     last_token: int = None
 
