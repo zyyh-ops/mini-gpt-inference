@@ -21,3 +21,19 @@ class KVRuntimeContext:
     physical_block: int
     block_offset: int
     physical_slot: int
+
+
+@dataclass
+class PrefillRuntimeContext:
+
+    seq_state: SequenceState
+
+    kv_pool: KVBlockPool
+
+    layer_idx: int
+
+    start_pos: int
+
+    context_length: int
+
+    slot_mapping: list[int]

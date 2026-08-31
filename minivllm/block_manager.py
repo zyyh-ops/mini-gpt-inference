@@ -75,6 +75,33 @@ class BlockManager:
 
         return physcial_block, block_offset, physcial_slot
 
+    def reserve_slots(
+        self,
+        seq: SequenceState,
+        num_tokens: int,
+    ) -> list[int]:
+        slots = []
+
+        start_pos = seq.length
+
+        for i in range(num_tokens):
+            logical_pos = start_pos + i
+
+            logical_block = logical_pos // self.block_size
+
+            offset = logical_pos % self.block_size
+
+            if logical_block == len(seq.block_table):
+                self._allocate_block(seq)
+
+            physical_block = seq.block_table[logical_block]
+
+            physical_slot = physical_block * self.block_size + offset
+
+            slots.append(physical_slot)
+
+        return slots
+
     def logical_to_slot(
         self,
         seq: SequenceState,

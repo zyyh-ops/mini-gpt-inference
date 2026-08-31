@@ -2,7 +2,7 @@ from torch import nn, Tensor
 
 from attention import KVCacheCausalSelfAttention, KVCache
 from feed_forward import FeedForward
-from kv_runtime import KVRuntimeContext
+from kv_runtime import KVRuntimeContext, PrefillRuntimeContext
 
 
 class TransformerBlock(nn.Module):
@@ -33,9 +33,9 @@ class TransformerBlock(nn.Module):
     def forward_prefill(
         self,
         x: Tensor,
-        kv_contexts: list[KVRuntimeContext],
+        context: PrefillRuntimeContext,
     ) -> Tensor:
-        x = x + self.attn.forward_prefill(self.layer_norm_1(x), kv_contexts)
+        x = x + self.attn.forward_prefill(self.layer_norm_1(x), context)
 
         x = x + self.ffn(self.layer_norm_2(x))
 

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from dataclasses import dataclass
-from kv_runtime import KVRuntimeContext
+from kv_runtime import KVRuntimeContext, PrefillRuntimeContext
 from paged_attention_v1_reference import paged_attention_online
 
 
@@ -90,22 +90,70 @@ class KVCacheCausalSelfAttention(nn.Module):
     def forward_prefill(
         self,
         x: Tensor,
-        kv_contexts: list[KVRuntimeContext] | None = None,
+        context: PrefillRuntimeContext,
     ):
-        outputs = []
+        import math
 
-        for t in range(x.shape[1]):
-            xt = x[:, t:t+1]
+        B, T, C = x.shape
 
-            out = self.forward_decode(
-                xt, kv_contexts[t]
+        assert B == 1
+        assert len(context.slot_mapping) == T
+
+        q, k, v = self.qkv(x).chunk(
+            3,
+            dim=-1,
+        )
+
+        q = q.view(B, T, self.n_head, self.head_size).transpose(1, 2)
+        k = k.view(B, T, self.n_head, self.head_size).transpose(1, 2)
+        v = v.view(B, T, self.n_head, self.head_size).transpose(1, 2)
+
+        scores = (
+            q @ k.transpose(-2, -1)
+        ) / math.sqrt(self.head_size)
+
+        mask = torch.tril(
+            torch.ones(
+                T, T, device=x.device, dtype=torch.bool,
+            )
+        )
+
+        scores = scores.masked_fill(
+            ~mask,
+            float("-inf"),
+        )
+
+        probs = torch.softmax(scores, dim=-1)
+
+        out = probs @ v
+
+        k_tokens = k[0].transpose(0, 1)
+        v_tokens = v[0].transpose(0, 1)
+
+        for token_idx, slot in enumerate(context.slot_mapping):
+            physical_block = slot // context.kv_pool.block_size
+
+            block_offset = slot % context.kv_pool.block_size
+
+            context.kv_pool.write_layer(
+                layer_idx=context.layer_idx,
+
+                physical_block=physical_block,
+
+                block_offset=block_offset,
+
+                k_new=k_tokens[token_idx],
+
+                v_new=v_tokens[token_idx],
             )
 
-            outputs.append(out)
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
 
-        return torch.cat(
-            outputs, dim=-1,
-        )
+        out = self.project(out)
+
+        out = self.resid_dropout(out)
+
+        return out
 
     def forward_decode(
         self,

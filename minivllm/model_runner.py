@@ -2,7 +2,7 @@ from model import MiniGPT
 from kv_block_pool import KVBlockPool
 from block_manager import BlockManager
 from sequence import SequenceState
-from kv_runtime import KVRuntimeContext
+from kv_runtime import KVRuntimeContext, PrefillRuntimeContext
 import torch
 
 
@@ -24,16 +24,46 @@ class ModelRunner:
         self,
         seq: SequenceState,
     ):
-        for token in seq.prompt_tokens:
-            seq.last_token = token
+        device = next(self.model.parameters()).device
 
-            next_token = self.decode_one(seq)
+        input_ids = torch.tensor(
+            [seq.prompt_tokens],
+            device=device,
+            dtype=torch.long,
+        )
 
-        # logits = self.model.prefill(input_ids, seq)
+        T = len(seq.prompt_tokens)
+
+        start_pos = seq.length
+
+        slot_mapping = self.block_manager.reserve_slots(seq, T)
+
+        contexts = []
+
+        for layer_idx in range(self.model.n_layer):
+            contexts.append(
+                PrefillRuntimeContext(
+                    seq_state=seq,
+                    kv_pool=self.kv_pool,
+                    layer_idx=layer_idx,
+                    start_pos=start_pos,
+                    context_length=start_pos + T,
+                    slot_mapping=slot_mapping,
+                )
+            )
+
+        logits = self.model.prefill(input_ids, contexts)
+
+        seq.length += T
+
+        next_token = torch.argmax(
+            logits[:, -1],
+            dim=-1,
+        ).item()
+
+        seq.generated_tokens.append(next_token)
 
         seq.last_token = next_token
-
-        seq.length = len(seq.prompt_tokens)
 
         return next_token
 
