@@ -200,6 +200,8 @@ class MiniRuntime:
 
         assert prefill_ids.isdisjoint(decode_ids)
 
+        print("the number of free blocks: ", len(self.block_manager.free_blocks))
+
 
 def main():
     workloads: list[tuple[int, int]] = [
@@ -212,6 +214,7 @@ def main():
     ]
 
     for max_num_batched_tokens in [32, 64, 128, 256]:
+        print("=" * 10 + f" {max_num_batched_tokens} " + "=" * 10)
 
         runtime = MiniRuntime(
             num_blocks=8,
@@ -224,7 +227,7 @@ def main():
 
         for i, (prompt, output) in enumerate(workloads):
             seq = SequenceState(
-                seq_id="A" + i,
+                seq_id=chr(ord('A') + i),
                 prompt_tokens=[i for i in range(prompt)],
                 max_tokens=prompt+output,
             )

@@ -49,7 +49,7 @@ class SequenceState:
     def initialize(self):
         self.last_token = self.prompt_tokens[-1]
 
-    arrival_iter: int
+    arrival_iter: int = 0
 
     first_schedule_iter: int | None = None
 
