@@ -51,6 +51,40 @@ class BlockManager:
         for _ in range(need_blocks):
             self._allocate_block(seq)
 
+    def num_new_blocks_needed(
+        self,
+        seq: SequenceState,
+        num_tokens: int,
+    ) -> int:
+        current_capacity = (
+            self.num_blocks
+            * self.block_size
+        )
+
+        target_length = seq.length + num_tokens
+
+        target_blocks = (
+            target_length
+            + self.block_size - 1
+        ) // self.block_size
+
+        return max(
+            0,
+            target_blocks - self.num_blocks
+        )
+
+    def can_reserve(
+        self,
+        seq: SequenceState,
+        num_tokens: int,
+    ) -> bool:
+        need = self.num_new_blocks_needed(
+            seq,
+            num_tokens,
+        )
+
+        return need <= len(self.free_blocks)
+
     def reserve_append_slot(
         self,
         seq: SequenceState,

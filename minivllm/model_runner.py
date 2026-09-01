@@ -61,10 +61,6 @@ class ModelRunner:
             dim=-1,
         ).item()
 
-        seq.generated_tokens.append(next_token)
-
-        seq.last_token = next_token
-
         return next_token
 
 

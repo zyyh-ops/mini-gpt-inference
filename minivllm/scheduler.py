@@ -1,19 +1,30 @@
 from block_manager import BlockManager
 from sequence import SequenceState, Status
+from dataclasses import dataclass
+
+
+@dataclass
+class ScheduleOutput:
+    prefill: list[SequenceState]
+    decode: list[SequenceState]
+    num_scheduled_tokens: int
 
 
 class Scheduler:
     def __init__(
         self,
         block_manager: BlockManager,
-        max_batch_size: int,
+        max_running: int,
+        max_num_batched_tokens: int,
     ):
         self.waiting: list[SequenceState] = []
         self.running: list[SequenceState] = []
 
         self.block_manager = block_manager
 
-        self.max_batch_size = max_batch_size
+        self.max_running = max_running
+
+        self.max_num_batched_tokens = max_num_batched_tokens
 
     def add_request(
         self,
@@ -55,10 +66,56 @@ class Scheduler:
 
     def schedule(self):
 
-        self.retire_finished()
+        prefill_batch = []
+        decode_batch = []
 
-        self.admit()
+        token_budget = self.max_num_batched_tokens
 
-        return self.running
+        for seq in self.running:
+            if token_budget < 1:
+                break
 
+            if not self.block_manager.can_reserve(
+                seq,
+                num_tokens=1,
+            ):
+                continue
 
+            decode_batch.append(seq)
+
+            token_budget -= 1
+
+        while self.waiting:
+            active_after_admit = len(self.running) + len(prefill_batch)
+
+            if active_after_admit >= self.max_running:
+                break
+
+            seq = self.waiting[0]
+
+            prompt_len = len(seq.prompt_tokens)
+
+            if prompt_len > token_budget:
+                break
+
+            if not self.block_manager.can_reserve(
+                seq,
+                num_tokens=prompt_len,
+            ):
+                break
+
+            self.waiting.pop(0)
+
+            prefill_batch.append(seq)
+
+            token_budget -= prompt_len
+
+        num_scheduled_tokens = (
+            self.max_num_batched_tokens - token_budget
+        )
+
+        return ScheduleOutput(
+            prefill=prefill_batch,
+            decode=decode_batch,
+            num_scheduled_tokens=num_scheduled_tokens,
+        )

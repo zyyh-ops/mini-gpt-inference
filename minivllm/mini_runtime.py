@@ -12,6 +12,7 @@ class MiniRuntime:
         num_blocks,
         block_size,
         max_running,
+        max_num_batched_tokens,
     ):
         self.block_manager = (
             BlockManager(
@@ -24,6 +25,7 @@ class MiniRuntime:
             Scheduler(
                 self.block_manager,
                 max_running,
+                max_num_batched_tokens,
             )
         )
 
@@ -55,81 +57,99 @@ class MiniRuntime:
         self.scheduler.add_request(seq)
 
     def step(self):
-        print(
-            f"\n=== Iteration "
-            f"{self.iteration} ==="
-        )
-
-        active = self.scheduler.schedule()
-
-        print(
-            "running:",
-            [
-                x.seq_id
-                for x in active
-            ]
-        )
-
-        for seq in active:
-            _, _, slot = self.block_manager.reserve_append_slot(seq)
-
-            if seq.status == Status.WAITING:
-
-                seq.status = Status.PREFILLING
-
-                self.runner.prefill(seq)
-
-                seq.status = Status.RUNNING
-
-            elif seq.status == Status.RUNNING:
-
-                next_token = self.runner.decode_one(seq)
-
-                seq.generated_tokens.append(next_token)
-
-                seq.last_token = next_token
-
-            print(
-                seq.seq_id,
-                "length=",
-                seq.length,
-                "slot=",
-                slot,
-                "blocks=",
-                seq.block_table
-            )
 
         self.iteration += 1
 
-        allocated = set(self.block_manager.block_owner.keys())
+        plan = self.scheduler.schedule()
+        
+        assert (
+            len(self.scheduler.running)
+            + len(plan.prefill)
+            <= self.scheduler.max_running
+            # f"error {len(self.scheduler.running)} + {len(plan.prefill)}, max_running={self.scheduler.running}"
+        ), f"error {len(self.scheduler.running)} + {len(plan.prefill)}, max_running={self.scheduler.running}"
 
-        free = set(self.block_manager.free_blocks)
 
-        assert allocated.isdisjoint(free)
+        print(f"\nIteration {self.iteration}")
+
+        print("prefill:", [x.seq_id for x in plan.prefill])
+
+        print("decode:", [x.seq_id for x in plan.decode])
+
+        print("scheduled tokens:", plan.num_scheduled_tokens)
+
+        for seq in plan.decode:
+            next_token = self.runner.decode_one(seq)
+
+            seq.generated_tokens.append(next_token)
+
+            seq.last_token = next_token
+
+            if seq.length >= seq.max_tokens:
+                seq.status = Status.FINISHED
+
+                self.block_manager.free(seq)
+
+                self.scheduler.running.remove(seq)
+
+        for seq in plan.prefill:
+            first_token = self.runner.prefill(seq)
+
+            seq.generated_tokens.append(first_token)
+
+            seq.last_token = first_token
+
+            seq.status = Status.RUNNING
+
+            self.scheduler.running.append(seq)
+
+        assert (
+            plan.num_scheduled_tokens
+            <= self.scheduler.max_num_batched_tokens
+        )
+
+        prefill_ids = {
+            x.seq_id
+            for x in plan.prefill
+        }
+
+        decode_ids = {
+            x.seq_id
+            for x in plan.decode
+        }
+
+        assert prefill_ids.isdisjoint(decode_ids)
 
 
 def main():
     runtime = MiniRuntime(
         num_blocks=8,
         block_size=4,
-        max_running=2,
+        max_running=4,
+        max_num_batched_tokens=16,
     )
 
     A = SequenceState(
         seq_id="A",
-        prompt_tokens=[1, 2, 3],
-        max_tokens=10,
+        prompt_tokens=[i for i in range(0, 6)],
+        max_tokens=8,
     )
 
     B = SequenceState(
         seq_id="B",
-        prompt_tokens=[5, 6, 7, 8],
-        max_tokens=7,
+        prompt_tokens=[i for i in range(6, 11)],
+        max_tokens=9,
     )
 
     C = SequenceState(
         seq_id="C",
-        prompt_tokens=[9, 10, 11],
+        prompt_tokens=[i for i in range(11, 21)],
+        max_tokens=13,
+    )
+
+    D = SequenceState(
+        seq_id="D",
+        prompt_tokens=[i for i in range(21, 24)],
         max_tokens=12,
     )
 
@@ -138,6 +158,8 @@ def main():
     runtime.add_request(B)
 
     runtime.add_request(C)
+
+    runtime.add_request(D)
 
     for _ in range(15):
         runtime.step()
