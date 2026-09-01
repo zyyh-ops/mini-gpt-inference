@@ -3,7 +3,11 @@ from enum import Enum
 
 class Status(Enum):
     WAITING = "waiting"
+
+    PREFILLING = "prefilling"
+
     RUNNING = "running"
+    
     FINISHED = "finished"
 
 
@@ -27,6 +31,18 @@ class SequenceState:
 
     block_table: list[int] = field(default_factory=list)
 
+    @property
+    def prompt_length(self):
+        return len(self.prompt_tokens)
+
+    @property
+    def remaining_prompt_tokens(self):
+        return self.prompt_length - self.prompt_pos
+
+    @property
+    def prompt_finished(self):
+        return self.prompt_pos == self.prompt_length
+    
     def is_finished(self):
         return self.length >= self.max_tokens
 

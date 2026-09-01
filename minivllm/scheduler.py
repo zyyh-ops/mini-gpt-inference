@@ -4,8 +4,21 @@ from dataclasses import dataclass
 
 
 @dataclass
+class PrefillWorkItem:
+    seq: SequenceState
+
+    start_pos: int
+
+    num_tokens: int
+
+    @property
+    def end_pos(self):
+        return self.start_pos + self.num_tokens
+
+
+@dataclass
 class ScheduleOutput:
-    prefill: list[SequenceState]
+    prefill: list[PrefillWorkItem]
     decode: list[SequenceState]
     num_scheduled_tokens: int
 
@@ -17,7 +30,8 @@ class Scheduler:
         max_running: int,
         max_num_batched_tokens: int,
     ):
-        self.waiting: list[SequenceState] = []
+        self.waiting: list[PrefillWorkItem] = []
+        self.prefilling: list[PrefillWorkItem] = []
         self.running: list[SequenceState] = []
 
         self.block_manager = block_manager
@@ -71,44 +85,103 @@ class Scheduler:
 
         token_budget = self.max_num_batched_tokens
 
+        free_block_budget = len(self.block_manager.free_blocks)
+
         for seq in self.running:
             if token_budget < 1:
                 break
 
-            if not self.block_manager.can_reserve(
-                seq,
-                num_tokens=1,
-            ):
+            needed_blocks = (
+                self.block_manager.num_new_blocks_needed(
+                    seq,
+                    num_tokens=1,
+                )
+            )
+
+            if needed_blocks > free_block_budget:
                 continue
 
             decode_batch.append(seq)
 
             token_budget -= 1
 
-        while self.waiting:
-            active_after_admit = len(self.running) + len(prefill_batch)
+            free_block_budget -= needed_blocks
 
-            if active_after_admit >= self.max_running:
+        for seq in list(self.prefilling):
+            if token_budget <= 0:
+                break
+
+            remaining = seq.remaining_prompt_tokens
+
+            if remaining <= 0:
+                continue
+
+            chunk_size = min(remaining, token_budget)
+
+            needed_blocks = (
+                self.block_manager.num_new_blocks_needed(
+                    seq,
+                    num_tokens=chunk_size,
+                )
+            )
+
+            if needed_blocks > free_block_budget:
+                continue
+
+            prefill_batch.append(
+                PrefillWorkItem(
+                    seq=seq,
+                    start_pos=seq.prompt_pos,
+                    num_tokens=chunk_size,
+                )
+            )
+
+            token_budget -= chunk_size
+
+            free_block_budget -= needed_blocks
+
+        while (
+            self.waiting
+            and token_budget > 0
+        ):
+            num_active = len(self.running) + len(self.prefilling)
+
+            if num_active >= self.max_running:
                 break
 
             seq = self.waiting[0]
 
-            prompt_len = len(seq.prompt_tokens)
+            remaining = seq.remaining_prompt_tokens
 
-            if prompt_len > token_budget:
-                break
+            chunk_size = min(remaining, token_budget)
 
-            if not self.block_manager.can_reserve(
-                seq,
-                num_tokens=prompt_len,
-            ):
+            needed_blocks = (
+                self.block_manager.num_new_blocks_needed(
+                    seq,
+                    num_tokens=chunk_size,
+                )
+            )
+
+            if needed_blocks > free_block_budget:
                 break
 
             self.waiting.pop(0)
 
-            prefill_batch.append(seq)
+            seq.status = Status.PREFILLING
 
-            token_budget -= prompt_len
+            self.prefilling.append(seq)
+
+            prefill_batch.append(
+                PrefillWorkItem(
+                    seq=seq,
+                    start_pos=seq.prompt_pos,
+                    num_tokens=chunk_size,
+                )
+            )
+
+            token_budget -= chunk_size
+
+            free_block_budget -= needed_blocks
 
         num_scheduled_tokens = (
             self.max_num_batched_tokens - token_budget

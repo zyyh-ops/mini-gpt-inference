@@ -37,3 +37,19 @@ class PrefillRuntimeContext:
     context_length: int
 
     slot_mapping: list[int]
+
+
+@dataclass
+class PrefillChunkContext:
+
+    seq_state: SequenceState
+
+    kv_pool: KVBlockPool
+
+    layer_idx: int
+
+    start_pos: int
+
+    num_tokens: int
+
+    slot_mapping: list[int]

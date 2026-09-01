@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from dataclasses import dataclass
-from kv_runtime import KVRuntimeContext, PrefillRuntimeContext
+from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
 from paged_attention_v1_reference import paged_attention_online
 
 
@@ -148,6 +148,78 @@ class KVCacheCausalSelfAttention(nn.Module):
             )
 
         out = out.transpose(1, 2).contiguous().view(B, T, C)
+
+        out = self.project(out)
+
+        out = self.resid_dropout(out)
+
+        return out
+
+    def forward_prefill_chunk(
+        self,
+        x: Tensor,
+        context: PrefillChunkContext,
+    ):
+        B, T, C = x.shape
+
+        assert B == 1
+        assert T == context.num_tokens
+
+        q, k, v = self.qkv(x).chunk(
+            3, dim=-1
+        )
+
+        q = q.view(B, T, self.n_head, self.head_size).transpose(1, 2)
+
+        k = k.view(B, T, self.n_head, self.head_size).transpose(1, 2)
+
+        v = v.view(B, T, self.n_head, self.head_size).transpose(1, 2)
+
+        k_tokens = k[0].transpose(0, 1)
+        v_tokens = v[0].transpose(0, 1)
+
+        for i, slot in enumerate(context.slot_mapping):
+            physical_block = slot // context.kv_pool.block_size
+
+            block_offset = slot % context.kv_pool.block_size
+
+            context.kv_pool.write_layer(
+                layer_idx=context.layer_idx,
+
+                physical_block=physical_block,
+
+                block_offset=block_offset,
+
+                k_new=k_tokens[i],
+
+                v_new=v_tokens[i],
+            )
+
+        outputs = []
+
+        for i in range(T):
+            q_i = q[0, :, i, :]
+
+            logical_pos = context.start_pos + i
+
+            current_context_length = logical_pos + 1
+
+            out_i = paged_attention_online(
+                q=q_i,
+                pool=context.kv_pool,
+                seq=context.seq_state,
+                layer_idx=context.layer_idx,
+                context_length=current_context_length,
+            )
+
+            outputs.append(out_i)
+
+        out = torch.stack(
+            outputs,
+            dim=0,
+        )
+
+        out = out.unsqueeze(0).contiguous().view(B, T, C)
 
         out = self.project(out)
 

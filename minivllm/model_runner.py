@@ -2,7 +2,7 @@ from model import MiniGPT
 from kv_block_pool import KVBlockPool
 from block_manager import BlockManager
 from sequence import SequenceState
-from kv_runtime import KVRuntimeContext, PrefillRuntimeContext
+from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
 import torch
 
 
@@ -62,6 +62,58 @@ class ModelRunner:
         ).item()
 
         return next_token
+
+
+    def prefill_chunk(
+        self,
+        seq: SequenceState,
+        start_pos: int,
+        num_tokens: int,
+    ):
+        assert start_pos == seq.prompt_pos
+        assert start_pos == seq.length
+
+        end_pos = start_pos + num_tokens
+
+        device = next(self.model.parameters()).device
+
+        tokens = seq.prompt_tokens[start_pos:end_pos]
+
+        input_ids = torch.tensor(
+            [tokens],
+            device=device,
+            dtype=torch.long,
+        )
+
+        slot_mapping = (
+            self.block_manager.reserve_slots(
+                seq=seq,
+                num_tokens=num_tokens,
+            )
+        )
+
+        contexts = []
+
+        for layer_idx in range(self.model.n_layer):
+            contexts.append(
+                PrefillChunkContext(
+                    seq_state=seq,
+                    kv_pool=self.kv_pool,
+                    layer_idx=layer_idx,
+                    start_pos=start_pos,
+                    num_tokens=num_tokens,
+                    slot_mapping=slot_mapping,
+                )
+            )
+
+        logits = self.model.prefill_chunk(
+            input_ids=input_ids,
+            contexts=contexts,
+        )
+
+        seq.length += num_tokens
+
+        return logits
 
 
     def decode_one(

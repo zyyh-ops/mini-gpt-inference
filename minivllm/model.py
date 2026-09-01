@@ -6,7 +6,7 @@ from torch.utils.checkpoint import checkpoint
 
 from block import TransformerBlock
 from attention import KVCache
-from kv_runtime import KVRuntimeContext, PrefillRuntimeContext
+from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
 from sequence import SequenceState
 
 class MiniGPT(nn.Module):
@@ -146,6 +146,35 @@ class MiniGPT(nn.Module):
             x = block.forward_prefill(
                 x,
                 contexts[layer_idx]
+            )
+
+        x = self.layer_norm(x)
+
+        logits = self.language_model_head(x)
+
+        return logits
+
+
+    def prefill_chunk(
+        self,
+        input_ids: torch.Tensor,
+        contexts: list[PrefillChunkContext],
+    ):
+        B, T = input_ids.shape
+
+        start_pos = contexts[0].start_pos
+
+        positions = torch.arange(start_pos, start_pos + T, device=input_ids.device)
+
+        x = (
+            self.token_embedding_table(input_ids)
+            + self.position_embedding_table(positions)
+        )
+
+        for layer_idx, block in enumerate(self.blocks):
+            x = block.forward_prefill_chunk(
+                x,
+                contexts[layer_idx],
             )
 
         x = self.layer_norm(x)

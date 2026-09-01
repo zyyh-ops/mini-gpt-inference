@@ -4,6 +4,7 @@ from block_manager import BlockManager
 from model_runner import ModelRunner
 from model import MiniGPT
 from kv_block_pool import KVBlockPool
+import torch
 
 
 class MiniRuntime:
@@ -50,29 +51,30 @@ class MiniRuntime:
 
         self.iteration = 0
 
+
     def add_request(
         self,
         seq: SequenceState,
     ):
         self.scheduler.add_request(seq)
 
+
     def step(self):
 
         self.iteration += 1
 
         plan = self.scheduler.schedule()
-        
+
         assert (
             len(self.scheduler.running)
             + len(plan.prefill)
             <= self.scheduler.max_running
-            # f"error {len(self.scheduler.running)} + {len(plan.prefill)}, max_running={self.scheduler.running}"
         ), f"error {len(self.scheduler.running)} + {len(plan.prefill)}, max_running={self.scheduler.running}"
 
 
         print(f"\nIteration {self.iteration}")
 
-        print("prefill:", [x.seq_id for x in plan.prefill])
+        print("prefill:", [x.seq.seq_id for x in plan.prefill])
 
         print("decode:", [x.seq_id for x in plan.decode])
 
@@ -92,16 +94,34 @@ class MiniRuntime:
 
                 self.scheduler.running.remove(seq)
 
-        for seq in plan.prefill:
-            first_token = self.runner.prefill(seq)
+        for item in plan.prefill:
+            seq = item.seq
 
-            seq.generated_tokens.append(first_token)
+            logits = self.runner.prefill_chunk(
+                seq=seq,
+                start_pos=item.start_pos,
+                num_tokens=item.num_tokens,
+            )
 
-            seq.last_token = first_token
+            seq.prompt_pos += item.num_tokens
 
-            seq.status = Status.RUNNING
+            assert seq.prompt_pos == seq.length
 
-            self.scheduler.running.append(seq)
+            if seq.prompt_finished:
+                first_token = torch.argmax(
+                    logits[:, -1],
+                    dim=-1,
+                ).item()
+
+                seq.generated_tokens.append(first_token)
+
+                seq.last_token = first_token
+
+                seq.status = Status.RUNNING
+
+                self.scheduler.prefilling.remove(seq)
+
+                self.scheduler.running.append(seq)
 
         assert (
             plan.num_scheduled_tokens
@@ -109,7 +129,7 @@ class MiniRuntime:
         )
 
         prefill_ids = {
-            x.seq_id
+            x.seq.seq_id
             for x in plan.prefill
         }
 
