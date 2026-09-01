@@ -7,7 +7,7 @@ class Status(Enum):
     PREFILLING = "prefilling"
 
     RUNNING = "running"
-    
+
     FINISHED = "finished"
 
 
@@ -48,3 +48,11 @@ class SequenceState:
 
     def initialize(self):
         self.last_token = self.prompt_tokens[-1]
+
+    arrival_iter: int
+
+    first_schedule_iter: int | None = None
+
+    first_token_iter: int | None = None
+
+    finish_iter: int | None = None

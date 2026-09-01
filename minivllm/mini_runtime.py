@@ -5,6 +5,33 @@ from model_runner import ModelRunner
 from model import MiniGPT
 from kv_block_pool import KVBlockPool
 import torch
+from dataclasses import dataclass
+
+
+@dataclass
+class IterationRecord:
+    iteration: int
+
+    prefill_requests: int
+    decode_requests: int
+
+    prefill_tokens: int
+    decode_tokens: int
+
+    scheduled_tokens: int
+
+    waiting: int
+    prefilling: int
+    running: int
+
+    used_blocks: int
+    free_blocks: int
+
+    kv_utilization: float
+
+    prefill_ms: float
+    decode_ms: float
+    iteration_ms: float
 
 
 class MiniRuntime:
@@ -51,6 +78,8 @@ class MiniRuntime:
 
         self.iteration = 0
 
+        self.records: list[IterationRecord] = []
+
 
     def add_request(
         self,
@@ -60,8 +89,11 @@ class MiniRuntime:
 
 
     def step(self):
+        import time
 
         self.iteration += 1
+
+        iter_begin = time.perf_counter()
 
         plan = self.scheduler.schedule()
 
@@ -80,12 +112,17 @@ class MiniRuntime:
 
         print("scheduled tokens:", plan.num_scheduled_tokens)
 
+        decode_begin = time.perf_counter()
+
         for seq in plan.decode:
             next_token = self.runner.decode_one(seq)
 
             seq.generated_tokens.append(next_token)
 
             seq.last_token = next_token
+
+            if seq.first_token_iter is None:
+                seq.first_token_iter = self.iteration
 
             if seq.length >= seq.max_tokens:
                 seq.status = Status.FINISHED
@@ -94,8 +131,15 @@ class MiniRuntime:
 
                 self.scheduler.running.remove(seq)
 
+        decode_ms = (time.perf_counter() - decode_begin) * 1000
+
+        prefill_begin = time.perf_counter()
+
         for item in plan.prefill:
             seq = item.seq
+
+            if seq.first_schedule_iter is None:
+                seq.first_schedule_iter = self.iteration
 
             logits = self.runner.prefill_chunk(
                 seq=seq,
@@ -117,11 +161,27 @@ class MiniRuntime:
 
                 seq.last_token = first_token
 
+                seq.first_token_iter = self.iteration
+
                 seq.status = Status.RUNNING
 
                 self.scheduler.prefilling.remove(seq)
 
                 self.scheduler.running.append(seq)
+
+        prefill_ms = (time.perf_counter() - prefill_begin) * 1000
+
+        prefill_tokens = sum(
+            item.num_tokens
+            for item in plan.prefill
+        )
+
+        decode_tokens = len(plan.decode)
+
+        assert (
+            prefill_tokens + decode_tokens
+            == plan.num_scheduled_tokens
+        )
 
         assert (
             plan.num_scheduled_tokens
@@ -142,47 +202,53 @@ class MiniRuntime:
 
 
 def main():
-    runtime = MiniRuntime(
-        num_blocks=8,
-        block_size=4,
-        max_running=4,
-        max_num_batched_tokens=16,
-    )
+    workloads: list[tuple[int, int]] = [
+        (32, 32),
+        (64, 32),
+        (128, 16),
+        (256, 16),
+        (48, 32),
+        (192, 16),
+    ]
 
-    A = SequenceState(
-        seq_id="A",
-        prompt_tokens=[i for i in range(0, 6)],
-        max_tokens=8,
-    )
+    for max_num_batched_tokens in [32, 64, 128, 256]:
 
-    B = SequenceState(
-        seq_id="B",
-        prompt_tokens=[i for i in range(6, 11)],
-        max_tokens=9,
-    )
+        runtime = MiniRuntime(
+            num_blocks=8,
+            block_size=16,
+            max_running=8,
+            max_num_batched_tokens=max_num_batched_tokens,
+        )
 
-    C = SequenceState(
-        seq_id="C",
-        prompt_tokens=[i for i in range(11, 21)],
-        max_tokens=13,
-    )
+        seq_list: list[SequenceState] = []
 
-    D = SequenceState(
-        seq_id="D",
-        prompt_tokens=[i for i in range(21, 24)],
-        max_tokens=12,
-    )
+        for i, (prompt, output) in enumerate(workloads):
+            seq = SequenceState(
+                seq_id="A" + i,
+                prompt_tokens=[i for i in range(prompt)],
+                max_tokens=prompt+output,
+            )
 
-    runtime.add_request(A)
+            seq_list.append(seq)
 
-    runtime.add_request(B)
+        runtime.add_request(seq_list[0])
 
-    runtime.add_request(C)
+        runtime.add_request(seq_list[1])
 
-    runtime.add_request(D)
+        for iteration in range(15):
+            if iteration == 2:
+                runtime.add_request(seq_list[2])
 
-    for _ in range(15):
-        runtime.step()
+            if iteration == 4:
+                runtime.add_request(seq_list[3])
+
+            if iteration == 8:
+                runtime.add_request(seq_list[4])
+
+            if iteration == 10:
+                runtime.add_request(seq_list[5])
+
+            runtime.step()
 
 
 if __name__ == "__main__":
