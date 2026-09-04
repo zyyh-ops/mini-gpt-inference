@@ -3,6 +3,8 @@ from torch import nn, Tensor
 from attention import KVCacheCausalSelfAttention, KVCache
 from feed_forward import FeedForward
 from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
+from decode_batch_metadata import DecodeBatchMetadata
+from kv_block_pool import KVBlockPool
 
 
 class TransformerBlock(nn.Module):
@@ -65,6 +67,31 @@ class TransformerBlock(nn.Module):
         x = x + self.ffn(self.layer_norm_2(x))
 
         return x
+
+
+    def forward_decode_batch(
+        self,
+        x: Tensor,
+        metadata: DecodeBatchMetadata,
+        kv_pool: KVBlockPool,
+        layer_idx: int,
+    ):
+        x = x + (
+            self.attn.forward_decode_batch(
+                self.layer_norm_1(x),
+
+                metadata=metadata,
+
+                kv_pool=kv_pool,
+
+                layer_idx=layer_idx,
+            )
+        )
+
+        x = x + self.ffn(self.layer_norm_2(x))
+
+        return x
+    
 
     def forward(
         self,

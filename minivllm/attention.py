@@ -7,6 +7,9 @@ from torch import Tensor, nn
 from dataclasses import dataclass
 from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
 from paged_attention_v1_reference import paged_attention_online
+from decode_batch_metadata import DecodeBatchMetadata
+from kv_block_pool import KVBlockPool
+from paged_attention_batch import paged_attention_batch_reference
 
 
 @dataclass
@@ -272,6 +275,66 @@ class KVCacheCausalSelfAttention(nn.Module):
         attention_out = self.resid_dropout(attention_out)
 
         return attention_out
+
+    def forward_decode_batch(
+        self,
+        x: torch.Tensor,
+        metadata: DecodeBatchMetadata,
+        kv_pool: KVBlockPool,
+        layer_idx: int,
+    ):
+        B, T, C = x.shape
+
+        assert T == 1
+
+        q, k, v = self.qkv(x).chunk(
+            3, dim=-1,
+        )
+
+        q = q.view(B, 1, self.n_head, self.head_size).transpose(1, 2)[:, :, 0, :]
+
+        k = k.view(B, 1, self.n_head, self.head_size).transpose(1, 2)[:, :, 0, :]
+
+        v = v.view(B, 1, self.n_head, self.head_size).transpose(1, 2)[:, :, 0, :]
+
+        for b in range(B):
+            slot = int(metadata.slot_mapping[b].item())
+
+            physical_block = slot // kv_pool.block_size
+
+            block_offset = slot % kv_pool.block_size
+
+            kv_pool.write_layer(
+                layer_idx=layer_idx,
+
+                physical_block=physical_block,
+
+                block_offset=block_offset,
+
+                k_new=k[b],
+
+                v_new=v[b],
+            )
+
+        attention_out = (
+            paged_attention_batch_reference(
+                q=q,
+
+                pool=kv_pool,
+
+                block_tables=metadata.block_tables,
+
+                context_lengths=metadata.context_lengths,
+
+                layer_idx=layer_idx,
+            )
+        )
+
+        attention_out = attention_out.reshape(B, 1, self.n_embd)
+
+        attention_out = self.project(attention_out)
+
+        attention_out = self.resid_dropout(attention_out)
 
     def forward(
         self,

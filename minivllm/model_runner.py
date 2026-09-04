@@ -3,6 +3,7 @@ from kv_block_pool import KVBlockPool
 from block_manager import BlockManager
 from sequence import SequenceState
 from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
+from decode_batch_metadata import DecodeBatchMetadata
 import torch
 
 
@@ -116,6 +117,102 @@ class ModelRunner:
         return logits
 
 
+    def _prepare_decode_batch(
+        self,
+        sequences: list[SequenceState],
+    ):
+        device = next(
+            self.model.parameters()
+        ).device()
+
+        B = len(sequences)
+
+        assert B > 0
+
+        input_ids = torch.tensor(
+            [
+                [seq.last_token]
+                for seq in sequences
+            ],
+            device=device,
+            dtype=torch.long,
+        )
+
+        slots = []
+
+        for seq in sequences:
+            (
+                physical_block,
+                block_offset,
+                physical_slot,
+            ) = (
+                self.block_manager
+                .reserve_append_slot(seq)
+            )
+
+            slots.append(physical_slot)
+
+        positions = torch.tensor(
+            [
+                seq.length
+                for seq in sequences
+            ],
+            device=device,
+            dtype=torch.long,
+        )
+
+        context_lengths = torch.tensor(
+            [
+                seq.length + 1
+                for seq in sequences
+            ],
+            device=device,
+            dtype=torch.long,
+        )
+
+        max_num_blocks = max(
+            len(seq.block_table)
+            for seq in sequences
+        )
+
+        block_tables = torch.full(
+            (
+                B,
+                max_num_blocks,
+            ),
+            -1,
+            device=device,
+            dtype=torch.long,
+        )
+
+        for b, seq in enumerate(sequences):
+            table = torch.tensor(
+                seq.block_table,
+                device=device,
+                dtype=torch.long,
+            )
+
+            block_tables[
+                b,
+                :len(seq.block_table),
+            ] = table
+
+        slot_mapping = torch.tensor(
+            slots,
+            device=device,
+            dtype=torch.long,
+        )
+
+        metadata = DecodeBatchMetadata(
+            positions=positions,
+            context_lengths=context_lengths,
+            block_tables=block_tables,
+            slot_mapping=slot_mapping,
+        )
+
+        return input_ids, metadata
+
+
     def decode_one(
         self,
         seq: SequenceState,
@@ -167,4 +264,38 @@ class ModelRunner:
         next_token = torch.argmax(logits[:, -1], dim=-1)
 
         return next_token.item()
-    
+
+
+    def decode_batch(
+        self,
+        sequences: list[SequenceState],
+    ):
+        if not sequences:
+            return []
+
+        input_ids, metadata = (
+            self._prepare_decode_batch(
+                sequences=sequences
+            )
+        )
+
+        logits = self.model.decode_batch(
+            input_ids=input_ids,
+
+            metadata=metadata,
+
+            kv_pool=self.kv_pool,
+        )
+
+        for seq in sequences:
+            seq.length += 1
+
+        next_tokens = torch.argmax(
+            logits[:, -1, :],
+            dim=-1,
+        )
+
+        return (
+            logits[:, -1, :],
+            next_tokens.tolist(),
+        )

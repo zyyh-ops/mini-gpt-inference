@@ -114,22 +114,20 @@ class MiniRuntime:
 
         decode_begin = time.perf_counter()
 
-        for seq in plan.decode:
-            next_token = self.runner.decode_one(seq)
+        if plan.decode:
+            logits, next_tokens = (
+                self.runner.decode_batch(
+                    plan.decode
+                )
+            )
 
-            seq.generated_tokens.append(next_token)
+            for seq, token in zip(
+                plan.decode,
+                next_tokens,
+            ):
+                seq.generated_tokens.append(token)
 
-            seq.last_token = next_token
-
-            if seq.first_token_iter is None:
-                seq.first_token_iter = self.iteration
-
-            if seq.length >= seq.max_tokens:
-                seq.status = Status.FINISHED
-
-                self.block_manager.free(seq)
-
-                self.scheduler.running.remove(seq)
+                seq.last_token = token
 
         decode_ms = (time.perf_counter() - decode_begin) * 1000
 

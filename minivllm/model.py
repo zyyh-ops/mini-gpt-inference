@@ -8,6 +8,10 @@ from block import TransformerBlock
 from attention import KVCache
 from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
 from sequence import SequenceState
+from decode_batch_metadata import DecodeBatchMetadata
+from kv_block_pool import KVBlockPool
+
+
 
 class MiniGPT(nn.Module):
     def __init__(
@@ -175,6 +179,39 @@ class MiniGPT(nn.Module):
             x = block.forward_prefill_chunk(
                 x,
                 contexts[layer_idx],
+            )
+
+        x = self.layer_norm(x)
+
+        logits = self.language_model_head(x)
+
+        return logits
+
+
+    def decode_batch(
+        self,
+        input_ids: Tensor,
+        metadata: DecodeBatchMetadata,
+        kv_pool: KVBlockPool,
+    ):
+        B = input_ids.shape[0]
+
+        positions = metadata.positions.unsqueeze(1)
+
+        x = (
+            self.token_embedding_table(input_ids)
+            + self.position_embedding_table(positions)
+        )
+
+        for layer_idx, block in enumerate(self.blocks):
+            x = block.forward_decode_batch(
+                x,
+
+                metadata=metadata,
+
+                kv_pool=kv_pool,
+
+                layer_idx=layer_idx,
             )
 
         x = self.layer_norm(x)
