@@ -117,7 +117,9 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         mask = torch.tril(
             torch.ones(
-                T, T, device=x.device, dtype=torch.bool,
+                T, T, 
+                device=x.device, 
+                dtype=torch.bool,
             )
         )
 
@@ -157,6 +159,7 @@ class KVCacheCausalSelfAttention(nn.Module):
         out = self.resid_dropout(out)
 
         return out
+
 
     def forward_prefill_chunk(
         self,
@@ -230,6 +233,7 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         return out
 
+
     def forward_decode(
         self,
         x: Tensor,
@@ -276,6 +280,7 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         return attention_out
 
+
     def forward_decode_batch(
         self,
         x: torch.Tensor,
@@ -297,24 +302,29 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         v = v.view(B, 1, self.n_head, self.head_size).transpose(1, 2)[:, :, 0, :]
 
-        for b in range(B):
-            slot = int(metadata.slot_mapping[b].item())
+        slots = metadata.slot_mapping
 
-            physical_block = slot // kv_pool.block_size
+        physical_blocks = torch.div(
+            slots,
+            kv_pool.block_size,
+            rounding_mode="floor",
+        )
 
-            block_offset = slot % kv_pool.block_size
+        block_offsets = (
+            slots % kv_pool.block_size
+        )
 
-            kv_pool.write_layer(
-                layer_idx=layer_idx,
+        kv_pool.k[
+            layer_idx,
+            physical_blocks,
+            block_offsets,
+        ] = k
 
-                physical_block=physical_block,
-
-                block_offset=block_offset,
-
-                k_new=k[b],
-
-                v_new=v[b],
-            )
+        kv_pool.v[
+            layer_idx,
+            physical_blocks,
+            block_offsets,
+        ] = v
 
         attention_out = (
             paged_attention_batch_reference(
@@ -337,6 +347,7 @@ class KVCacheCausalSelfAttention(nn.Module):
         attention_out = self.resid_dropout(attention_out)
 
         return attention_out
+
 
     def forward(
         self,
