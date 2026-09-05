@@ -116,8 +116,13 @@ def summarize(times):
 
 
 def main():
+    N_EMBD, N_HEAD, VOCAB_SIZE, BLOCK_SIZE = 512, 8, 1024, 1024
+
+    BLOCK_SIZE_1 = 16
 
     for B in [1, 2, 4, 8, 16, 32]:
+        NUM_BLOCKS = 8 * B
+
         serial_runner = ModelRunner(
             model=MiniGPT(
                 n_embd=512,
@@ -129,13 +134,13 @@ def main():
             ),
             kv_pool=KVBlockPool(
                 n_layer=8,
-                num_blocks=8,
-                block_size=16,
+                num_blocks=NUM_BLOCKS,
+                block_size=BLOCK_SIZE_1,
                 n_head=8,
                 head_dim=64,
             ),
             block_manager=BlockManager(
-                num_blocks=8,
+                num_blocks=NUM_BLOCKS,
                 block_size=16,
             )
         )
@@ -151,14 +156,14 @@ def main():
             ),
             kv_pool=KVBlockPool(
                 n_layer=8,
-                num_blocks=8,
-                block_size=16,
+                num_blocks=NUM_BLOCKS,
+                block_size=BLOCK_SIZE_1,
                 n_head=8,
                 head_dim=64,
             ),
             block_manager=BlockManager(
-                num_blocks=8,
-                block_size=16,
+                num_blocks=NUM_BLOCKS,
+                block_size=BLOCK_SIZE_1,
             )
         )
 
@@ -173,15 +178,30 @@ def main():
 
             sequences.append(seq)
 
+        import copy
+
+        serial_sequences = copy.deepcopy(sequences)
+        batch_sequences = copy.deepcopy(sequences)
+
+        for seq in serial_sequences:
+            next_token = serial_runner.prefill(seq)
+
+            seq.last_token = next_token
+
+        for seq in batch_sequences:
+            next_token = batch_runner.prefill(seq)
+
+            seq.last_token = next_token
+
         serial_times = benchmark_serial(
             runner=serial_runner,
-            sequences=sequences,
+            sequences=serial_sequences,
             fixed_length=120,
         )
 
         batch_times = benchmark_batch(
             runner=batch_runner,
-            sequences=sequences,
+            sequences=batch_sequences,
             fixed_length=120,
         )
 
@@ -201,14 +221,18 @@ def main():
 
         batch_efficiency = speedup / B
 
-        print("=" * 80 + f" B_active={B} " + "=" * 80)
+        print("=" * 50 + f" B_active={B} " + "=" * 50)
 
-        print(f"serial_times={serial_times}")
+        print(f"statis_serial_times={statis_serial_times}")
 
-        print(f"batch_times={batch_times}")
+        print(f"statis_batch_times={statis_batch_times}")
 
         print(f"speedup={speedup:.2f}")
 
         print(f"serial tok/s={throughput_serial} tokens/s")
 
         print(f"batch tok/s={throughput_batch} tokens/s")
+
+
+if __name__ == "__main__":
+    main()

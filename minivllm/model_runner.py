@@ -123,7 +123,7 @@ class ModelRunner:
     ):
         device = next(
             self.model.parameters()
-        ).device()
+        ).device
 
         B = len(sequences)
 

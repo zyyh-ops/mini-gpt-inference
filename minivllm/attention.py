@@ -336,6 +336,8 @@ class KVCacheCausalSelfAttention(nn.Module):
 
         attention_out = self.resid_dropout(attention_out)
 
+        return attention_out
+
     def forward(
         self,
         x: Tensor,
