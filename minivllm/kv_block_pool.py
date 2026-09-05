@@ -37,6 +37,7 @@ class KVBlockPool:
         block_size: int,
         n_head: int,
         head_dim: int,
+        device="cpu",
         dtype=torch.float32,
     ):
         self.n_layer = n_layer
@@ -57,11 +58,13 @@ class KVBlockPool:
         self.k = torch.empty(
             shape,
             dtype=dtype,
+            device=device,
         )
 
         self.v = torch.empty(
             shape,
             dtype=dtype,
+            device=device,
         )
 
     def write(

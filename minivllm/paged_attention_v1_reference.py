@@ -22,12 +22,22 @@ def paged_attention_online(
 
     m = torch.full(
         (H, ),
-        float("-inf")
+        float("-inf"),
+        device=q.device,
+        dtype=q.dtype,
     )
 
-    l = torch.zeros(H)
+    l = torch.zeros(
+        H,
+        device=q.device,
+        dtype=q.dtype,
+    )
 
-    O = torch.zeros_like(q)
+    O = torch.zeros_like(
+        q,
+        device=q.device,
+        dtype=q.dtype,
+    )
 
     for logical_block, physical_block in enumerate(seq.block_table):
         logic_start = logical_block * pool.block_size

@@ -5,6 +5,7 @@ from model_runner import ModelRunner
 from model import MiniGPT
 from kv_block_pool import KVBlockPool
 from block_manager import BlockManager
+from torch.profiler import ProfilerActivity, profile, record_function
 
 
 def cuda_time_ms(fn):
@@ -115,30 +116,122 @@ def summarize(times):
     }
 
 
+def profile_serial(
+    runner: ModelRunner,
+    sequences: list[SequenceState],
+    fixed_length: int = 120,
+    warmup: int = 20,
+):
+    with torch.inference_mode():
+
+        for _ in range(warmup):
+            reset_length(
+                sequences,
+                fixed_length,
+            )
+
+            for seq in sequences:
+                runner.decode_one(seq)
+
+            
+        reset_length(
+            sequences,
+            fixed_length,
+        )
+
+        torch.cuda.synchronize()
+
+        with profile(
+            activities=[
+                ProfilerActivity.CPU,
+                ProfilerActivity.CUDA,
+            ],
+            record_shapes=True,
+        ) as prof:
+            
+            with record_function(
+                "serial_decode"
+            ):
+                for seq in sequences:
+                    runner.decode_one(seq)
+
+        torch.cuda.synchronize()
+
+    return prof
+
+
+def profile_batch(
+    runner: ModelRunner,
+    sequences: list[SequenceState],
+    fixed_length: int = 120,
+    warmup: int = 20,
+):
+    with torch.inference_mode():
+
+        for _ in range(warmup):
+            reset_length(
+                sequences,
+                fixed_length,
+            )
+
+            runner.decode_batch(sequences)
+
+        reset_length(
+            sequences,
+            fixed_length,
+        )
+
+        torch.cuda.synchronize()
+
+        with profile(
+            activities=[
+                ProfilerActivity.CPU,
+                ProfilerActivity.CUDA,
+            ],
+            record_shapes=True,
+        ) as prof:
+
+            with record_function(
+                "batch_decode"
+            ):
+                runner.decode_batch(sequences)
+
+        torch.cuda.synchronize()
+
+    return prof
+
+
 def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
     N_EMBD, N_HEAD, VOCAB_SIZE, BLOCK_SIZE = 512, 8, 1024, 1024
 
     BLOCK_SIZE_1 = 16
 
-    for B in [1, 2, 4, 8, 16, 32]:
+    for B in [16]:
         NUM_BLOCKS = 8 * B
 
+        model = MiniGPT(
+            n_embd=512,
+            n_head=8,
+            vocab_size=1024,
+            block_size=1024,
+            dropout=0,
+            n_layer=8,
+        ).to(device)
+
+        kv_pool = KVBlockPool(
+            n_layer=8,
+            num_blocks=NUM_BLOCKS,
+            block_size=BLOCK_SIZE_1,
+            n_head=8,
+            head_dim=64,
+            device=device,
+        )
+
         serial_runner = ModelRunner(
-            model=MiniGPT(
-                n_embd=512,
-                n_head=8,
-                vocab_size=1024,
-                block_size=1024,
-                dropout=0,
-                n_layer=8,
-            ),
-            kv_pool=KVBlockPool(
-                n_layer=8,
-                num_blocks=NUM_BLOCKS,
-                block_size=BLOCK_SIZE_1,
-                n_head=8,
-                head_dim=64,
-            ),
+            model=model,
+            kv_pool=kv_pool,
             block_manager=BlockManager(
                 num_blocks=NUM_BLOCKS,
                 block_size=16,
@@ -146,21 +239,8 @@ def main():
         )
 
         batch_runner = ModelRunner(
-            model=MiniGPT(
-                n_embd=512,
-                n_head=8,
-                vocab_size=1024,
-                block_size=1024,
-                dropout=0,
-                n_layer=8,
-            ),
-            kv_pool=KVBlockPool(
-                n_layer=8,
-                num_blocks=NUM_BLOCKS,
-                block_size=BLOCK_SIZE_1,
-                n_head=8,
-                head_dim=64,
-            ),
+            model=model,
+            kv_pool=kv_pool,
             block_manager=BlockManager(
                 num_blocks=NUM_BLOCKS,
                 block_size=BLOCK_SIZE_1,
@@ -193,45 +273,95 @@ def main():
 
             seq.last_token = next_token
 
-        serial_times = benchmark_serial(
+        # serial_times = benchmark_serial(
+        #     runner=serial_runner,
+        #     sequences=serial_sequences,
+        #     fixed_length=120,
+        # )
+
+        # batch_times = benchmark_batch(
+        #     runner=batch_runner,
+        #     sequences=batch_sequences,
+        #     fixed_length=120,
+        # )
+
+        # statis_serial_times = summarize(serial_times)
+
+        # statis_batch_times = summarize(batch_times)
+
+        # serial_time = statis_serial_times["mean"]
+
+        # batch_time = statis_batch_times["mean"]
+
+        # speedup = serial_time / batch_time
+
+        # throughput_serial = B * 1000 // serial_time
+
+        # throughput_batch = B * 1000 // batch_time
+
+        # batch_efficiency = speedup / B
+
+        # print("=" * 50 + f" B_active={B} " + "=" * 50)
+
+        # print(f"statis_serial_times={statis_serial_times}")
+
+        # print(f"statis_batch_times={statis_batch_times}")
+
+        # print(f"speedup={speedup:.2f}")
+
+        # print(f"serial tok/s={throughput_serial} tokens/s")
+
+        # print(f"batch tok/s={throughput_batch} tokens/s")
+
+        serial_prof = profile_serial(
             runner=serial_runner,
             sequences=serial_sequences,
-            fixed_length=120,
         )
 
-        batch_times = benchmark_batch(
+        batch_prof = profile_batch(
             runner=batch_runner,
             sequences=batch_sequences,
-            fixed_length=120,
         )
 
-        statis_serial_times = summarize(serial_times)
+        for prof in (serial_prof, batch_prof):
+            print(
+                prof.key_averages(
+                    group_by_input_shape=True
+                ).table(
+                    sort_by="self_cuda_time_total",
+                    row_limit=30,
+                )
+            )
 
-        statis_batch_times = summarize(batch_times)
+            print("=" * 80)
 
-        serial_time = statis_serial_times["mean"]
+            print(
+                prof.key_averages(
+                    group_by_input_shape=True
+                ).table(
+                    sort_by="self_cpu_time_total",
+                    row_limit=30,
+                )
+            )
 
-        batch_time = statis_batch_times["mean"]
+            print("=" * 80)
 
-        speedup = serial_time / batch_time
+            for event in prof.key_averages():
+                if (
+                    "item" in event.key
+                    or
+                    "local_scalar" in event.key
+                ):
+                    print(
+                        event.key,
+                        "count=",
+                        event.count,
+                        "cpu=",
+                        event.cpu_time_total,
+                    )
 
-        throughput_serial = B * 1000 // serial_time
-
-        throughput_batch = B * 1000 // batch_time
-
-        batch_efficiency = speedup / B
-
-        print("=" * 50 + f" B_active={B} " + "=" * 50)
-
-        print(f"statis_serial_times={statis_serial_times}")
-
-        print(f"statis_batch_times={statis_batch_times}")
-
-        print(f"speedup={speedup:.2f}")
-
-        print(f"serial tok/s={throughput_serial} tokens/s")
-
-        print(f"batch tok/s={throughput_batch} tokens/s")
+            print()
+            print()
 
 
 if __name__ == "__main__":
