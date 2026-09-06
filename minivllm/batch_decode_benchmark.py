@@ -208,7 +208,7 @@ def main():
 
     BLOCK_SIZE_1 = 16
 
-    for B in [16]:
+    for B in [1, 2, 4, 8, 16, 32]:
         NUM_BLOCKS = 8 * B
 
         model = MiniGPT(
@@ -273,95 +273,95 @@ def main():
 
             seq.last_token = next_token
 
-        # serial_times = benchmark_serial(
-        #     runner=serial_runner,
-        #     sequences=serial_sequences,
-        #     fixed_length=120,
-        # )
-
-        # batch_times = benchmark_batch(
-        #     runner=batch_runner,
-        #     sequences=batch_sequences,
-        #     fixed_length=120,
-        # )
-
-        # statis_serial_times = summarize(serial_times)
-
-        # statis_batch_times = summarize(batch_times)
-
-        # serial_time = statis_serial_times["mean"]
-
-        # batch_time = statis_batch_times["mean"]
-
-        # speedup = serial_time / batch_time
-
-        # throughput_serial = B * 1000 // serial_time
-
-        # throughput_batch = B * 1000 // batch_time
-
-        # batch_efficiency = speedup / B
-
-        # print("=" * 50 + f" B_active={B} " + "=" * 50)
-
-        # print(f"statis_serial_times={statis_serial_times}")
-
-        # print(f"statis_batch_times={statis_batch_times}")
-
-        # print(f"speedup={speedup:.2f}")
-
-        # print(f"serial tok/s={throughput_serial} tokens/s")
-
-        # print(f"batch tok/s={throughput_batch} tokens/s")
-
-        serial_prof = profile_serial(
+        serial_times = benchmark_serial(
             runner=serial_runner,
             sequences=serial_sequences,
+            fixed_length=120,
         )
 
-        batch_prof = profile_batch(
+        batch_times = benchmark_batch(
             runner=batch_runner,
             sequences=batch_sequences,
+            fixed_length=120,
         )
 
-        for prof in (serial_prof, batch_prof):
-            print(
-                prof.key_averages(
-                    group_by_input_shape=True
-                ).table(
-                    sort_by="self_cuda_time_total",
-                    row_limit=30,
-                )
-            )
+        statis_serial_times = summarize(serial_times)
 
-            print("=" * 80)
+        statis_batch_times = summarize(batch_times)
 
-            print(
-                prof.key_averages(
-                    group_by_input_shape=True
-                ).table(
-                    sort_by="self_cpu_time_total",
-                    row_limit=30,
-                )
-            )
+        serial_time = statis_serial_times["mean"]
 
-            print("=" * 80)
+        batch_time = statis_batch_times["mean"]
 
-            for event in prof.key_averages():
-                if (
-                    "item" in event.key
-                    or
-                    "local_scalar" in event.key
-                ):
-                    print(
-                        event.key,
-                        "count=",
-                        event.count,
-                        "cpu=",
-                        event.cpu_time_total,
-                    )
+        speedup = serial_time / batch_time
 
-            print()
-            print()
+        throughput_serial = B * 1000 // serial_time
+
+        throughput_batch = B * 1000 // batch_time
+
+        batch_efficiency = speedup / B
+
+        print("=" * 50 + f" B_active={B} " + "=" * 50)
+
+        print(f"statis_serial_times={statis_serial_times}")
+
+        print(f"statis_batch_times={statis_batch_times}")
+
+        print(f"speedup={speedup:.2f}")
+
+        print(f"serial tok/s={throughput_serial} tokens/s")
+
+        print(f"batch tok/s={throughput_batch} tokens/s")
+
+        # serial_prof = profile_serial(
+        #     runner=serial_runner,
+        #     sequences=serial_sequences,
+        # )
+
+        # batch_prof = profile_batch(
+        #     runner=batch_runner,
+        #     sequences=batch_sequences,
+        # )
+
+        # for prof in (serial_prof, batch_prof):
+        #     print(
+        #         prof.key_averages(
+        #             group_by_input_shape=True
+        #         ).table(
+        #             sort_by="self_cuda_time_total",
+        #             row_limit=30,
+        #         )
+        #     )
+
+        #     print("=" * 80)
+
+        #     print(
+        #         prof.key_averages(
+        #             group_by_input_shape=True
+        #         ).table(
+        #             sort_by="self_cpu_time_total",
+        #             row_limit=30,
+        #         )
+        #     )
+
+        #     print("=" * 80)
+
+        #     for event in prof.key_averages():
+        #         if (
+        #             "item" in event.key
+        #             or
+        #             "local_scalar" in event.key
+        #         ):
+        #             print(
+        #                 event.key,
+        #                 "count=",
+        #                 event.count,
+        #                 "cpu=",
+        #                 event.cpu_time_total,
+        #             )
+
+        #     print()
+        #     print()
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkCont
 from paged_attention_v1_reference import paged_attention_online
 from decode_batch_metadata import DecodeBatchMetadata
 from kv_block_pool import KVBlockPool
-from paged_attention_batch import paged_attention_batch_reference
+from paged_attention_batch import paged_attention_batch_reference, paged_attention_batch_online_v1
 
 
 @dataclass
@@ -327,7 +327,7 @@ class KVCacheCausalSelfAttention(nn.Module):
         ] = v
 
         attention_out = (
-            paged_attention_batch_reference(
+            paged_attention_batch_online_v1(
                 q=q,
 
                 pool=kv_pool,

@@ -2,9 +2,6 @@ import math
 import torch
 from kv_block_pool import KVBlockPool
 from sequence import SequenceState
-from model_runner import ModelRunner
-from model import MiniGPT
-from block_manager import BlockManager
 
 
 def paged_attention_batch_reference(
@@ -153,8 +150,6 @@ def paged_attention_batch_online_v1(
         dtype=q.dtype,
     )
 
-    outputs = []
-
     for logical_block in range(M):
         physical_blocks = block_tables[
             :,
@@ -274,65 +269,4 @@ def paged_attention_batch_online_v1(
             O,
         )
 
-        outputs.append(O)
-
-    return torch.stack(
-        O,
-        dim=1,
-    )
-
-
-def main():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    sequences = []
-
-    context_lengths = [3, 9, 17, 31]
-
-    for i, context_length in enumerate(context_lengths):
-        seq = SequenceState(
-            seq_id=chr(ord('A') + i),
-            prompt_tokens=[j for j in context_length],
-        )
-
-        sequences.append(seq)
-
-    N_EMBD = 512
-    N_HEAD = 8
-    HEAD_DIM = 64
-
-    model = MiniGPT(
-        n_embd=N_EMBD,
-        n_head=N_HEAD,
-        vocab_size=1024,
-        block_size=1024,
-        dropout=0,
-        n_layer=8,
-    ).to(device)
-
-    kv_pool = KVBlockPool(
-        n_layer=8,
-        num_blocks=4*8,
-        block_size=16,
-        n_head=N_HEAD,
-        head_dim=HEAD_DIM,
-        device=device,
-    )
-
-    runner = ModelRunner(
-        model=model,
-        kv_pool=kv_pool,
-        block_manager=BlockManager(
-            num_blocks=4*8,
-            block_size=16,
-        )
-    )
-
-    for seq in sequences:
-        next_token = runner.prefill(seq)
-
-        seq.last_token = next_token
-
-    out_reference = runner.decode_batch(sequences)
-
-    
+    return O
