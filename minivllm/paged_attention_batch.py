@@ -128,7 +128,7 @@ def paged_attention_batch_online_v1(
     B, H, D = q.shape
 
     S = pool.block_size
-
+    scale = 1.0 / math.sqrt(D)
     M = block_tables.shape[1]
 
     m = torch.full(
@@ -208,6 +208,7 @@ def paged_attention_batch_online_v1(
             ~valid_mask,
             float("-inf"),
         )
+        scores = scores * scale
 
         block_max = scores.max(
             dim=-1
@@ -230,10 +231,18 @@ def paged_attention_batch_online_v1(
 
         l_new = alpha * l + beta.sum(dim=-1)
 
+        # The KV pool is allocated with torch.empty. Mask invalid value
+        # positions BEFORE multiplication: 0 * NaN is still NaN.
+        safe_v = torch.where(
+            valid_mask[:, 0, :, None, None],
+            v_block,
+            torch.zeros_like(v_block),
+        )
+
         block_O = torch.einsum(
             "bhs,bshd->bhd",
             beta,
-            v_block,
+            safe_v,
         )
 
         O_new = (
@@ -243,9 +252,6 @@ def paged_attention_batch_online_v1(
             +
             block_O
         ) / l_new[:, :, None]
-
-        m_new = m
-        l_new = l
 
         active = (valid_counts > 0)
 

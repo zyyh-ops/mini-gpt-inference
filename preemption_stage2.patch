@@ -1,0 +1,58 @@
+--- a/minivllm/model_runner.py
++++ b/minivllm/model_runner.py
+@@ -78,7 +78,10 @@
+ 
+         device = next(self.model.parameters()).device
+ 
+-        tokens = seq.prompt_tokens[start_pos:end_pos]
++        # A resumed request recomputes its cached prefix: prompt +
++        # generated_tokens[:-1]. The pending last_token remains for Decode.
++        tokens = seq.prefill_input_tokens[start_pos:end_pos]
++        assert len(tokens) == num_tokens, "prefill chunk exceeds input prefix"
+ 
+         input_ids = torch.tensor(
+             [tokens],
+--- a/minivllm/mini_runtime.py
++++ b/minivllm/mini_runtime.py
+@@ -150,21 +150,29 @@
+             assert seq.prompt_pos == seq.length
+ 
+             if seq.prompt_finished:
+-                first_token = torch.argmax(
+-                    logits[:, -1],
+-                    dim=-1,
+-                ).item()
+-
+-                seq.generated_tokens.append(first_token)
+-
+-                seq.last_token = first_token
+-
+-                seq.first_token_iter = self.iteration
++                if seq.recompute_tokens is not None:
++                    # The rebuilt KV excludes the pending last_token.
++                    # Never sample logits again: that output was already
++                    # generated before preemption.
++                    assert seq.generated_tokens
++                    assert seq.last_token == seq.generated_tokens[-1]
++                    assert seq.length == len(seq.recompute_tokens)
++                    seq.recompute_tokens = None
++                    # prompt_pos tracks the temporary recompute prefix during
++                    # restoration; restore its ordinary prompt-only meaning.
++                    seq.prompt_pos = seq.prompt_length
++                else:
++                    first_token = torch.argmax(
++                        logits[:, -1],
++                        dim=-1,
++                    ).item()
++
++                    seq.generated_tokens.append(first_token)
++                    seq.last_token = first_token
++                    seq.first_token_iter = self.iteration
+ 
+                 seq.status = Status.RUNNING
+-
+                 self.scheduler.prefilling.remove(seq)
+-
+                 self.scheduler.running.append(seq)
+ 
+         prefill_ms = (time.perf_counter() - prefill_begin) * 1000

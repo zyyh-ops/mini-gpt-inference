@@ -150,21 +150,29 @@ class MiniRuntime:
             assert seq.prompt_pos == seq.length
 
             if seq.prompt_finished:
-                first_token = torch.argmax(
-                    logits[:, -1],
-                    dim=-1,
-                ).item()
+                if seq.recompute_tokens is not None:
+                    # The rebuilt KV excludes the pending last_token.
+                    # Never sample logits again: that output was already
+                    # generated before preemption.
+                    assert seq.generated_tokens
+                    assert seq.last_token == seq.generated_tokens[-1]
+                    assert seq.length == len(seq.recompute_tokens)
+                    seq.recompute_tokens = None
+                    # prompt_pos tracks the temporary recompute prefix during
+                    # restoration; restore its ordinary prompt-only meaning.
+                    seq.prompt_pos = seq.prompt_length
+                else:
+                    first_token = torch.argmax(
+                        logits[:, -1],
+                        dim=-1,
+                    ).item()
 
-                seq.generated_tokens.append(first_token)
-
-                seq.last_token = first_token
-
-                seq.first_token_iter = self.iteration
+                    seq.generated_tokens.append(first_token)
+                    seq.last_token = first_token
+                    seq.first_token_iter = self.iteration
 
                 seq.status = Status.RUNNING
-
                 self.scheduler.prefilling.remove(seq)
-
                 self.scheduler.running.append(seq)
 
         prefill_ms = (time.perf_counter() - prefill_begin) * 1000
@@ -198,6 +206,11 @@ class MiniRuntime:
 
         assert prefill_ids.isdisjoint(decode_ids)
 
+        for seq in self.scheduler.running:
+            if seq.is_finished():
+                seq.finish_iter = self.iteration
+        self.scheduler.retire_finished()
+        
         print("the number of free blocks: ", len(self.block_manager.free_blocks))
 
 

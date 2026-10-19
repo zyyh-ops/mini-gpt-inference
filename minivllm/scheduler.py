@@ -46,16 +46,33 @@ class Scheduler:
     ):
         self.waiting.append(seq)
 
+    def preempt(self, seq: SequenceState) -> None:
+        """Evict KV and queue for recomputation. Call only between steps."""
+        if seq in self.running:
+            assert seq.generated_tokens, "RUNNING request has no output token"
+            assert seq.last_token == seq.generated_tokens[-1]
+            seq.recompute_tokens = seq.prompt_tokens + seq.generated_tokens[:-1]
+            assert len(seq.recompute_tokens) == seq.length
+            self.running.remove(seq)
+        elif seq in self.prefilling:
+            # Discard partial prefill KV. For an interrupted recompute,
+            # keep recompute_tokens; for an ordinary prefill, keep None.
+            self.prefilling.remove(seq)
+        else:
+            raise ValueError("Only active requests may be preempted")
+
+        self.block_manager.free(seq)  # also resets seq.length and block_table
+        seq.prompt_pos = 0
+        seq.status = Status.WAITING
+        self.waiting.insert(0, seq)
+
     def retire_finished(self):
         alive = []
 
         for seq in self.running:
-
             if seq.is_finished():
                 seq.status = Status.FINISHED
-
                 self.block_manager.free(seq)
-
             else:
                 alive.append(seq)
 

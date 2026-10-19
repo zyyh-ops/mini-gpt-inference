@@ -1,0 +1,48 @@
+--- a/minivllm/sequence.py
++++ b/minivllm/sequence.py
+@@ -33,2 +33,10 @@
+ 
++    # None for first prefill; cached token prefix when restoring an
++    # interrupted RUNNING request. The pending last_token is not included.
++    recompute_tokens: list[int] | None = None
++
++    @property
++    def prefill_input_tokens(self) -> list[int]:
++        return self.prompt_tokens if self.recompute_tokens is None else self.recompute_tokens
++
+     @property
+@@ -39,3 +47,3 @@
+     def remaining_prompt_tokens(self):
+-        return self.prompt_length - self.prompt_pos
++        return len(self.prefill_input_tokens) - self.prompt_pos
+ 
+@@ -43,3 +51,3 @@
+     def prompt_finished(self):
+-        return self.prompt_pos == self.prompt_length
++        return self.prompt_pos == len(self.prefill_input_tokens)
+     
+--- a/minivllm/scheduler.py
++++ b/minivllm/scheduler.py
+@@ -48,2 +48,22 @@
+ 
++    def preempt(self, seq: SequenceState) -> None:
++        """Evict KV and queue for recomputation. Call only between steps."""
++        if seq in self.running:
++            assert seq.generated_tokens, "RUNNING request has no output token"
++            assert seq.last_token == seq.generated_tokens[-1]
++            seq.recompute_tokens = seq.prompt_tokens + seq.generated_tokens[:-1]
++            assert len(seq.recompute_tokens) == seq.length
++            self.running.remove(seq)
++        elif seq in self.prefilling:
++            # Discard partial prefill KV. For an interrupted recompute,
++            # keep recompute_tokens; for an ordinary prefill, keep None.
++            self.prefilling.remove(seq)
++        else:
++            raise ValueError("Only active requests may be preempted")
++
++        self.block_manager.free(seq)  # also resets seq.length and block_table
++        seq.prompt_pos = 0
++        seq.status = Status.WAITING
++        self.waiting.insert(0, seq)
++
+     def retire_finished(self):

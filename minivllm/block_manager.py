@@ -70,7 +70,7 @@ class BlockManager:
 
         return max(
             0,
-            target_blocks - self.num_blocks
+            target_blocks - len(seq.block_table)
         )
 
     def can_reserve(

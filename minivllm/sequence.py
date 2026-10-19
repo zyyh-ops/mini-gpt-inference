@@ -31,20 +31,29 @@ class SequenceState:
 
     block_table: list[int] = field(default_factory=list)
 
+    # None for first prefill; cached token prefix when restoring an
+    # interrupted RUNNING request. The pending last_token is not included.
+    recompute_tokens: list[int] | None = None
+
+    @property
+    def prefill_input_tokens(self) -> list[int]:
+        return self.prompt_tokens if self.recompute_tokens is None else self.recompute_tokens
+
     @property
     def prompt_length(self):
         return len(self.prompt_tokens)
 
     @property
     def remaining_prompt_tokens(self):
-        return self.prompt_length - self.prompt_pos
+        return len(self.prefill_input_tokens) - self.prompt_pos
 
     @property
     def prompt_finished(self):
-        return self.prompt_pos == self.prompt_length
+        return self.prompt_pos == len(self.prefill_input_tokens)
     
     def is_finished(self):
-        return self.length >= self.max_tokens
+        max_output_tokens = self.max_tokens - self.prompt_length
+        return len(self.generated_tokens) >= max_output_tokens
 
     def initialize(self):
         self.last_token = self.prompt_tokens[-1]

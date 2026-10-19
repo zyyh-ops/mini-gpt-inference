@@ -1,0 +1,22 @@
+--- a/minivllm/paged_attention_batch.py
++++ b/minivllm/paged_attention_batch.py
+@@ -230,10 +230,18 @@
+ 
+         l_new = alpha * l + beta.sum(dim=-1)
+ 
++        # The KV pool is allocated with torch.empty. Mask invalid value
++        # positions BEFORE multiplication: 0 * NaN is still NaN.
++        safe_v = torch.where(
++            valid_mask[:, 0, :, None, None],
++            v_block,
++            torch.zeros_like(v_block),
++        )
++
+         block_O = torch.einsum(
+             "bhs,bshd->bhd",
+             beta,
+-            v_block,
++            safe_v,
+         )
+ 
+         O_new = (

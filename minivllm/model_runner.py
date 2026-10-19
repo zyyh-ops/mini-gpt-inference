@@ -78,7 +78,10 @@ class ModelRunner:
 
         device = next(self.model.parameters()).device
 
-        tokens = seq.prompt_tokens[start_pos:end_pos]
+        # A resumed request recomputes its cached prefix: prompt +
+        # generated_tokens[:-1]. The pending last_token remains for Decode.
+        tokens = seq.prefill_input_tokens[start_pos:end_pos]
+        assert len(tokens) == num_tokens, "prefill chunk exceeds input prefix"
 
         input_ids = torch.tensor(
             [tokens],
