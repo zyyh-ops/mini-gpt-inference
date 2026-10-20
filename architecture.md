@@ -1,6 +1,5 @@
 # Inference Runtime 架构与关键不变量
 
-> 以 2026-10-20 提供的 `mini-gpt-inference-main.zip` 源码为依据。描述的是当前实现，不是生产级推理框架的一般性承诺。
 
 ## 1. 控制流与数据流
 
@@ -103,9 +102,3 @@ seq.recompute_tokens = seq.prompt_tokens + seq.generated_tokens[:-1]
 若在普通 Prefill 尚未完成时被抢占，则丢弃部分缓存并重头 Prefill；若正在重建时再次被抢占，则保留重计算历史前缀并重新从头构建。
 
 `protected_ids` 保护已调度但尚未执行的请求；发生抢占的轮次会暂停新增准入，减少 ping-pong 现象。**目前没有通用无饥饿证明，也没有生产级公平性策略。**
-
-## 6. 正确性与测试边界
-
-Phase 2 工程化副本共运行 29 项 CPU 测试 PASS，包括 26 项算法正确性回归测试和 3 项包导入检查。覆盖自动抢占、真实 Tiny MiniGPT 生成一致性、资源竞争、跨 Block Attention、Padding NaN 屏蔽、生命周期与回收。
-
-尚未验证 CUDA 运行时、GPU Kernel 时间、动态异步服务请求、真实 LLM 模型权重与大规模压力。当前 `MiniRuntime.step()` 有若干耗时变量与 `IterationRecord` 声明，但未把记录 append 到 `self.records`，这些变量目前不构成实际 per-stage benchmark 数据。

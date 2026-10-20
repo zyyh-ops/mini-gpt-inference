@@ -21,3 +21,6 @@ proflie_*.json
 *.egg-info/
 dist/
 build/
+
+FINAL_RELEASE_STEPS.md
+docs/
