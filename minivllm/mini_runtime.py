@@ -41,6 +41,7 @@ class MiniRuntime:
         block_size,
         max_running,
         max_num_batched_tokens,
+        preemption_policy="conservative",
     ):
         self.block_manager = (
             BlockManager(
@@ -54,6 +55,7 @@ class MiniRuntime:
                 self.block_manager,
                 max_running,
                 max_num_batched_tokens,
+                preemption_policy=preemption_policy,
             )
         )
 
@@ -77,9 +79,7 @@ class MiniRuntime:
         )
 
         self.iteration = 0
-
         self.records: list[IterationRecord] = []
-
 
     def add_request(
         self,
@@ -87,46 +87,29 @@ class MiniRuntime:
     ):
         self.scheduler.add_request(seq)
 
-
     def step(self):
         import time
-
         self.iteration += 1
-
         iter_begin = time.perf_counter()
-
         plan = self.scheduler.schedule()
 
         assert (
-            len(self.scheduler.running)
-            + len(plan.prefill)
+            len(self.scheduler.running) + len(plan.prefill)
             <= self.scheduler.max_running
         ), f"error {len(self.scheduler.running)} + {len(plan.prefill)}, max_running={self.scheduler.running}"
 
-
         print(f"\nIteration {self.iteration}")
-
         print("prefill:", [x.seq.seq_id for x in plan.prefill])
-
         print("decode:", [x.seq_id for x in plan.decode])
-
         print("scheduled tokens:", plan.num_scheduled_tokens)
 
         decode_begin = time.perf_counter()
 
         if plan.decode:
-            logits, next_tokens = (
-                self.runner.decode_batch(
-                    plan.decode
-                )
-            )
+            logits, next_tokens = self.runner.decode_batch(plan.decode)
 
-            for seq, token in zip(
-                plan.decode,
-                next_tokens,
-            ):
+            for seq, token in zip(plan.decode, next_tokens):
                 seq.generated_tokens.append(token)
-
                 seq.last_token = token
 
         decode_ms = (time.perf_counter() - decode_begin) * 1000
@@ -144,9 +127,7 @@ class MiniRuntime:
                 start_pos=item.start_pos,
                 num_tokens=item.num_tokens,
             )
-
             seq.prompt_pos += item.num_tokens
-
             assert seq.prompt_pos == seq.length
 
             if seq.prompt_finished:
@@ -174,7 +155,7 @@ class MiniRuntime:
                 seq.status = Status.RUNNING
                 self.scheduler.prefilling.remove(seq)
                 self.scheduler.running.append(seq)
-
+                
         prefill_ms = (time.perf_counter() - prefill_begin) * 1000
 
         prefill_tokens = sum(
@@ -242,7 +223,6 @@ def main():
                 prompt_tokens=[i for i in range(prompt)],
                 max_tokens=prompt+output,
             )
-
             seq_list.append(seq)
 
         runtime.add_request(seq_list[0])

@@ -1,0 +1,283 @@
+diff --git a/minivllm/mini_runtime.py b/minivllm/mini_runtime.py
+index 96f4e34..4e83864 100644
+--- a/minivllm/mini_runtime.py
++++ b/minivllm/mini_runtime.py
+@@ -41,6 +41,7 @@ class MiniRuntime:
+         block_size,
+         max_running,
+         max_num_batched_tokens,
++        preemption_policy="conservative",
+     ):
+         self.block_manager = (
+             BlockManager(
+@@ -54,6 +55,7 @@ class MiniRuntime:
+                 self.block_manager,
+                 max_running,
+                 max_num_batched_tokens,
++                preemption_policy=preemption_policy,
+             )
+         )
+ 
+diff --git a/minivllm/scheduler.py b/minivllm/scheduler.py
+index c67be1e..42af6aa 100644
+--- a/minivllm/scheduler.py
++++ b/minivllm/scheduler.py
+@@ -29,6 +29,7 @@ class Scheduler:
+         block_manager: BlockManager,
+         max_running: int,
+         max_num_batched_tokens: int,
++        preemption_policy: str = "conservative",
+     ):
+         self.waiting: list[PrefillWorkItem] = []
+         self.prefilling: list[PrefillWorkItem] = []
+@@ -40,6 +41,11 @@ class Scheduler:
+ 
+         self.max_num_batched_tokens = max_num_batched_tokens
+ 
++        if preemption_policy not in ("conservative", "recompute"):
++            raise ValueError("preemption_policy must be 'conservative' or 'recompute'")
++        self.preemption_policy = preemption_policy
++        self.num_preemptions = 0
++
+     def _max_kv_blocks(self, seq: SequenceState) -> int:
+         tokens = seq.max_tokens - 1
+         bs = self.block_manager.block_size
+@@ -75,6 +81,8 @@ class Scheduler:
+         else:
+             raise ValueError("Only active requests may be preempted")
+ 
++        self.num_preemptions += 1
++        seq.num_preemptions += 1
+         self.block_manager.free(seq)  # also resets seq.length and block_table
+         seq.prompt_pos = 0
+         seq.status = Status.WAITING
+@@ -112,120 +120,128 @@ class Scheduler:
+ 
+             self.running.append(seq)
+ 
+-    def schedule(self):
++    def _choose_victim(
++        self, target: SequenceState, protected_ids: set[int]
++    ) -> SequenceState | None:
++        """Prefer newest partial-prefill, then newest decode, but never protected work.
+ 
+-        prefill_batch = []
+-        decode_batch = []
++        This is a deliberately simple policy, not production-grade fairness.
++        """
++        for seq in [*reversed(self.prefilling), *reversed(self.running)]:
++            if seq is target or id(seq) in protected_ids:
++                continue
++            if seq.block_table:
++                return seq
++        return None
++
++    def _free_for(self, target: SequenceState, needed: int,
++                  available: int, protected_ids: set[int]) -> tuple[int, bool]:
++        """Reclaim physical blocks, preserving scheduled requests and the target."""
++        any_preempted = False
++        if self.preemption_policy != "recompute":
++            return available, any_preempted
++        while available < needed:
++            victim = self._choose_victim(target, protected_ids)
++            if victim is None:
++                break
++            released = len(victim.block_table)
++            self.preempt(victim)
++            available += released
++            any_preempted = True
++        return available, any_preempted
++
++    def _prefill_chunk_size(self, seq: SequenceState,
++                            remaining_budget: int, available_blocks: int) -> int:
++        desired = min(seq.remaining_prompt_tokens, remaining_budget)
++        if self.preemption_policy != "recompute":
++            return desired
++        # Limit the work to already-held capacity plus uncommitted blocks;
++        # this makes progress instead of demanding a too-large chunk.
++        fit = ((len(seq.block_table) + available_blocks)
++               * self.block_manager.block_size - seq.length)
++        return min(desired, max(0, fit))
+ 
++    def schedule(self):
++        prefill_batch: list[PrefillWorkItem] = []
++        decode_batch: list[SequenceState] = []
+         token_budget = self.max_num_batched_tokens
+-
+         free_block_budget = len(self.block_manager.free_blocks)
++        # Protected work has only been planned, not executed yet: victim
++        # selection must not free its KV / invalidate its block table.
++        protected_ids: set[int] = set()
++        preempted_this_round = False
+ 
+-        for seq in self.running:
++        for seq in list(self.running):
+             if token_budget < 1:
+                 break
+-
+-            needed_blocks = (
+-                self.block_manager.num_new_blocks_needed(
+-                    seq,
+-                    num_tokens=1,
+-                )
+-            )
+-
+-            if needed_blocks > free_block_budget:
++            if seq.status != Status.RUNNING:
++                continue  # preempted by an earlier admission in this round
++            needed = self.block_manager.num_new_blocks_needed(seq, 1)
++            if needed > free_block_budget:
++                free_block_budget, did_preempt = self._free_for(
++                    seq, needed, free_block_budget, protected_ids)
++                preempted_this_round |= did_preempt
++            if needed > free_block_budget:
+                 continue
+-
+             decode_batch.append(seq)
+-
++            protected_ids.add(id(seq))
+             token_budget -= 1
+-
+-            free_block_budget -= needed_blocks
++            free_block_budget -= needed
+ 
+         for seq in list(self.prefilling):
+             if token_budget <= 0:
+                 break
+-
+-            remaining = seq.remaining_prompt_tokens
+-
+-            if remaining <= 0:
++            if seq.status != Status.PREFILLING:
++                continue  # preempted earlier in this round
++            if seq.remaining_prompt_tokens <= 0:
+                 continue
+-
+-            chunk_size = min(remaining, token_budget)
+-
+-            needed_blocks = (
+-                self.block_manager.num_new_blocks_needed(
+-                    seq,
+-                    num_tokens=chunk_size,
+-                )
+-            )
+-
+-            if needed_blocks > free_block_budget:
++            chunk_size = self._prefill_chunk_size(seq, token_budget,
++                                                   free_block_budget)
++            if chunk_size == 0 and self.preemption_policy == "recompute":
++                # Need at least one token worth of KV capacity to progress.
++                free_block_budget, did_preempt = self._free_for(
++                    seq, 1, free_block_budget, protected_ids)
++                preempted_this_round |= did_preempt
++                chunk_size = self._prefill_chunk_size(seq, token_budget,
++                                                       free_block_budget)
++            if chunk_size <= 0:
+                 continue
+-
+-            prefill_batch.append(
+-                PrefillWorkItem(
+-                    seq=seq,
+-                    start_pos=seq.prompt_pos,
+-                    num_tokens=chunk_size,
+-                )
+-            )
+-
++            needed = self.block_manager.num_new_blocks_needed(seq, chunk_size)
++            if needed > free_block_budget:
++                continue
++            prefill_batch.append(PrefillWorkItem(seq, seq.prompt_pos, chunk_size))
++            protected_ids.add(id(seq))
+             token_budget -= chunk_size
+-
+-            free_block_budget -= needed_blocks
+-
+-        while (
+-            self.waiting
+-            and token_budget > 0
+-        ):
+-            num_active = len(self.running) + len(self.prefilling)
+-
+-            if num_active >= self.max_running:
++            free_block_budget -= needed
++
++        # After a preemption, defer *all* fresh admissions to the next step.
++        # Otherwise the evicted sequence could immediately reclaim the KV
++        # budget and start a ping-pong preempt/re-admit cycle.
++        while self.waiting and token_budget > 0 and not preempted_this_round:
++            active = len(self.running) + len(self.prefilling)
++            if active >= self.max_running:
+                 break
+-
+             seq = self.waiting[0]
+-
+-            if not self._can_admit_without_preemption(seq):
++            if (self.preemption_policy == "conservative"
++                    and not self._can_admit_without_preemption(seq)):
+                 break
+-
+-            remaining = seq.remaining_prompt_tokens
+-
+-            chunk_size = min(remaining, token_budget)
+-
+-            needed_blocks = (
+-                self.block_manager.num_new_blocks_needed(
+-                    seq,
+-                    num_tokens=chunk_size,
+-                )
+-            )
+-
+-            if needed_blocks > free_block_budget:
++            chunk_size = self._prefill_chunk_size(seq, token_budget,
++                                                  free_block_budget)
++            if chunk_size <= 0:
++                break  # do not preempt active work for a new admission
++            needed = self.block_manager.num_new_blocks_needed(seq, chunk_size)
++            if needed > free_block_budget:
+                 break
+-
+             self.waiting.pop(0)
+-
+             seq.status = Status.PREFILLING
+-
+             self.prefilling.append(seq)
+-
+-            prefill_batch.append(
+-                PrefillWorkItem(
+-                    seq=seq,
+-                    start_pos=seq.prompt_pos,
+-                    num_tokens=chunk_size,
+-                )
+-            )
+-
++            prefill_batch.append(PrefillWorkItem(seq, seq.prompt_pos, chunk_size))
++            protected_ids.add(id(seq))
+             token_budget -= chunk_size
+-
+-            free_block_budget -= needed_blocks
+-
+-        num_scheduled_tokens = (
+-            self.max_num_batched_tokens - token_budget
+-        )
++            free_block_budget -= needed
+ 
+         return ScheduleOutput(
+             prefill=prefill_batch,
+             decode=decode_batch,
+-            num_scheduled_tokens=num_scheduled_tokens,
+-        )
+\ No newline at end of file
++            num_scheduled_tokens=self.max_num_batched_tokens - token_budget,
++        )
+diff --git a/minivllm/sequence.py b/minivllm/sequence.py
+index 1383f09..6182531 100644
+--- a/minivllm/sequence.py
++++ b/minivllm/sequence.py
+@@ -34,6 +34,7 @@ class SequenceState:
+     # None for first prefill; cached token prefix when restoring an
+     # interrupted RUNNING request. The pending last_token is not included.
+     recompute_tokens: list[int] | None = None
++    num_preemptions: int = 0
+ 
+     @property
+     def prefill_input_tokens(self) -> list[int]:
