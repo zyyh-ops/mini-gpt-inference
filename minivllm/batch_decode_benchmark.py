@@ -1,10 +1,10 @@
 import time
 import torch
-from sequence import SequenceState
-from model_runner import ModelRunner
-from model import MiniGPT
-from kv_block_pool import KVBlockPool
-from block_manager import BlockManager
+from .sequence import SequenceState
+from .model_runner import ModelRunner
+from .model import MiniGPT
+from .kv_block_pool import KVBlockPool
+from .block_manager import BlockManager
 from torch.profiler import ProfilerActivity, profile, record_function
 
 

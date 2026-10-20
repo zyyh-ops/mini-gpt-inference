@@ -1,7 +1,7 @@
 """Step 2: manual recompute restoration, using a REAL tiny MiniGPT on CPU.
 
 Run from repository root after applying stage-1 and stage-2 patches:
-  PYTHONPATH=./minivllm python -m unittest discover \
+  python -m unittest discover \
       -s tests -p 'test_preemption_restore.py' -v
 
 Tests restoration only; they do not test automatic victim selection / liveness.
@@ -13,13 +13,13 @@ import unittest
 
 import torch
 
-from block_manager import BlockManager
-from kv_block_pool import KVBlockPool
-from mini_runtime import MiniRuntime
-from model import MiniGPT
-from model_runner import ModelRunner
-from scheduler import Scheduler
-from sequence import SequenceState, Status
+from minivllm.block_manager import BlockManager
+from minivllm.kv_block_pool import KVBlockPool
+from minivllm.mini_runtime import MiniRuntime
+from minivllm.model import MiniGPT
+from minivllm.model_runner import ModelRunner
+from minivllm.scheduler import Scheduler
+from minivllm.sequence import SequenceState, Status
 
 
 def tiny_runtime(model, *, token_budget=3):

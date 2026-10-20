@@ -2,7 +2,7 @@
 """Trace scheduling state (not a timed benchmark) for preemption policies.
 
 Place alongside experiments/bench_preemption.py and run from repo root:
-PYTHONPATH=./minivllm:./experiments python experiments/trace_preemption.py \
+python -m experiments.trace_preemption \
   --blocks 2 --output-json artifacts/preemption/trace_blocks2.json
 """
 import argparse
@@ -14,9 +14,9 @@ from types import SimpleNamespace
 
 import torch
 
-from bench_preemption import make_runtime, make_workload
-from model import MiniGPT
-from sequence import Status
+from .bench_preemption import make_runtime, make_workload
+from minivllm.model import MiniGPT
+from minivllm.sequence import Status
 
 
 def run_trace(model, cfg, policy, blocks):

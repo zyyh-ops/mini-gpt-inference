@@ -3,15 +3,15 @@
 This substitutes a deterministic fake ModelRunner but exercises the REAL
 MiniRuntime, Scheduler, BlockManager, and SequenceState state transitions.
 Run from repo root:
-  PYTHONPATH=./minivllm python -m unittest discover -s tests -p 'test_runtime_lifecycle.py' -v
+  python -m unittest discover -s tests -p 'test_runtime_lifecycle.py' -v
 """
 import unittest
 import torch
 
-from block_manager import BlockManager
-from mini_runtime import MiniRuntime
-from scheduler import Scheduler
-from sequence import SequenceState, Status
+from minivllm.block_manager import BlockManager
+from minivllm.mini_runtime import MiniRuntime
+from minivllm.scheduler import Scheduler
+from minivllm.sequence import SequenceState, Status
 
 
 class FakeModelRunner:

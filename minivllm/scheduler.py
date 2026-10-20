@@ -1,5 +1,5 @@
-from block_manager import BlockManager
-from sequence import SequenceState, Status
+from .block_manager import BlockManager
+from .sequence import SequenceState, Status
 from dataclasses import dataclass
 
 
@@ -95,16 +95,6 @@ class Scheduler:
                 alive.append(seq)
 
         self.running = alive
-
-    def admit(self):
-        while(len(self.running) < self.max_batch_size and self.waiting):
-            seq = self.waiting[0]
-            if not self.block_manager.can_allocate(seq):
-                break
-
-            self.waiting.pop(0)
-            self.block_manager.allocate(seq)
-            self.running.append(seq)
 
     def _choose_victim(
         self,

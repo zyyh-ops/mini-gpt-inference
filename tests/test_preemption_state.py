@@ -1,14 +1,14 @@
 """Stage-1 preemption tests: KV eviction and semantic state preservation.
 
 Run from repository root:
-  PYTHONPATH=./minivllm python -m unittest discover -s tests -p 'test_preemption_state.py' -v
+  python -m unittest discover -s tests -p 'test_preemption_state.py' -v
 
 This stage does NOT yet implement automatic victim selection or restoration.
 """
 import unittest
-from block_manager import BlockManager
-from scheduler import Scheduler
-from sequence import SequenceState, Status
+from minivllm.block_manager import BlockManager
+from minivllm.scheduler import Scheduler
+from minivllm.sequence import SequenceState, Status
 
 
 def setup_running(manager, scheduler):

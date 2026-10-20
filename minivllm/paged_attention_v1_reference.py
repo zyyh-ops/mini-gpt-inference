@@ -2,9 +2,9 @@ import math
 
 import torch
 
-from sequence import SequenceState
-from block_manager import BlockManager
-from kv_block_pool import KVBlockPool
+from .sequence import SequenceState
+from .block_manager import BlockManager
+from .kv_block_pool import KVBlockPool
 
 
 def paged_attention_online(

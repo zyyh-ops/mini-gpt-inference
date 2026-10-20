@@ -1,7 +1,7 @@
 import math
 import torch
-from kv_block_pool import KVBlockPool
-from sequence import SequenceState
+from .kv_block_pool import KVBlockPool
+from .sequence import SequenceState
 
 
 def paged_attention_batch_reference(

@@ -5,11 +5,11 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 from dataclasses import dataclass
-from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
-from paged_attention_v1_reference import paged_attention_online
-from decode_batch_metadata import DecodeBatchMetadata
-from kv_block_pool import KVBlockPool
-from paged_attention_batch import paged_attention_batch_reference, paged_attention_batch_online_v1
+from .kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
+from .paged_attention_v1_reference import paged_attention_online
+from .decode_batch_metadata import DecodeBatchMetadata
+from .kv_block_pool import KVBlockPool
+from .paged_attention_batch import paged_attention_batch_reference, paged_attention_batch_online_v1
 
 
 @dataclass

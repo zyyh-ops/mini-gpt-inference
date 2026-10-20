@@ -1,8 +1,8 @@
 import unittest
 
 import torch
-from kv_block_pool import KVBlockPool
-from paged_attention_batch import (
+from minivllm.kv_block_pool import KVBlockPool
+from minivllm.paged_attention_batch import (
     paged_attention_batch_reference,
     paged_attention_batch_online_v1,
 )

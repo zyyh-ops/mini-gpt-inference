@@ -1,5 +1,4 @@
-from sequence import SequenceState, Status
-import torch
+from .sequence import SequenceState
 
 
 class BlockManager:
@@ -12,16 +11,6 @@ class BlockManager:
         )
 
         self.block_owner: dict[int, str] = {}
-
-    def can_allocate(
-        self,
-        seq: SequenceState,
-    ) -> bool:
-        need_blocks = (
-            seq.max_tokens + self.block_size - 1
-        ) // self.block_size
-
-        return need_blocks <= len(self.free_blocks)
 
     def _allocate_block(
         self,
@@ -40,27 +29,11 @@ class BlockManager:
 
         return physical_block
 
-    def allocate(
-        self,
-        seq: SequenceState,
-    ):  
-        need_blocks = (
-            seq.max_tokens + self.block_size - 1
-        ) // self.block_size
-
-        for _ in range(need_blocks):
-            self._allocate_block(seq)
-
     def num_new_blocks_needed(
         self,
         seq: SequenceState,
         num_tokens: int,
     ) -> int:
-        current_capacity = (
-            self.num_blocks
-            * self.block_size
-        )
-
         target_length = seq.length + num_tokens
 
         target_blocks = (

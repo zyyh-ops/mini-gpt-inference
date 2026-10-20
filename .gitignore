@@ -15,3 +15,9 @@ logs/
 *.trace.json
 *.patch
 artifacts
+
+# Historical profiler artifacts (keep reproducible summaries under docs/)
+proflie_*.json
+*.egg-info/
+dist/
+build/

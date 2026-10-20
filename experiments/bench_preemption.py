@@ -3,9 +3,9 @@
 
 Place in project root as experiments/bench_preemption.py.
 Usage (from repo root):
-  PYTHONPATH=./minivllm python experiments/bench_preemption.py --device cpu \
+  python -m experiments.bench_preemption --device cpu \
       --num-blocks 2,4,8 --repeats 1 --output-json artifacts/preemption/cpu_smoke.json
-  PYTHONPATH=./minivllm python experiments/bench_preemption.py --device cuda \
+  python -m experiments.bench_preemption --device cuda \
       --num-blocks 2,4,8 --repeats 3 --output-json artifacts/preemption/gpu.json
 
 Not a vLLM serving benchmark. All requests arrive together, greedy decoding;
@@ -22,13 +22,13 @@ import time
 
 import torch
 
-from block_manager import BlockManager
-from kv_block_pool import KVBlockPool
-from mini_runtime import MiniRuntime
-from model import MiniGPT
-from model_runner import ModelRunner
-from scheduler import Scheduler
-from sequence import SequenceState, Status
+from minivllm.block_manager import BlockManager
+from minivllm.kv_block_pool import KVBlockPool
+from minivllm.mini_runtime import MiniRuntime
+from minivllm.model import MiniGPT
+from minivllm.model_runner import ModelRunner
+from minivllm.scheduler import Scheduler
+from minivllm.sequence import SequenceState, Status
 
 
 class DiscardOutput(io.TextIOBase):

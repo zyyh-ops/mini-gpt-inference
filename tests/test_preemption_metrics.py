@@ -1,7 +1,7 @@
 """CPU-only validation of the paired preemption benchmark harness.
 
 Place under tests/, run with:
-  PYTHONPATH=./minivllm python -m unittest discover \
+  python -m unittest discover \
     -s tests -p 'test_preemption_metrics.py' -v
 """
 from types import SimpleNamespace
@@ -9,7 +9,7 @@ import unittest
 import torch
 
 from experiments.bench_preemption import run_once
-from model import MiniGPT
+from minivllm.model import MiniGPT
 
 
 class TestPreemptionMetrics(unittest.TestCase):

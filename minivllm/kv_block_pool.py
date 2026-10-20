@@ -1,5 +1,5 @@
 import torch
-from sequence import SequenceState
+from .sequence import SequenceState
 
 
 def make_kv(

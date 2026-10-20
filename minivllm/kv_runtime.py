@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from sequence import SequenceState
-from block_manager import BlockManager
-from kv_block_pool import KVBlockPool
+from .sequence import SequenceState
+from .block_manager import BlockManager
+from .kv_block_pool import KVBlockPool
 
 
 @dataclass

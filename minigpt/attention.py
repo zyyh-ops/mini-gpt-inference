@@ -6,7 +6,7 @@ from torch import Tensor, nn
 
 from dataclasses import dataclass
 from minivllm.kv_runtime import KVRuntimeContext
-from paged_attention_v1_reference import paged_attention_online
+from minivllm.paged_attention_v1_reference import paged_attention_online
 
 
 @dataclass

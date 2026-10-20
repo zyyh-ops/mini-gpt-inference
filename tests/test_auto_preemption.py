@@ -1,7 +1,7 @@
 """Auto recompute-preemption tests for MiniRuntime (CPU only).
 
 Run from repository root after applying preemption_stage3.patch:
-  PYTHONPATH=./minivllm python -m unittest discover -s tests \
+  python -m unittest discover -s tests \
       -p 'test_auto_preemption.py' -v
 """
 import contextlib
@@ -11,13 +11,13 @@ import random
 
 import torch
 
-from block_manager import BlockManager
-from mini_runtime import MiniRuntime
-from scheduler import Scheduler
-from sequence import SequenceState, Status
-from model import MiniGPT
-from model_runner import ModelRunner
-from kv_block_pool import KVBlockPool
+from minivllm.block_manager import BlockManager
+from minivllm.mini_runtime import MiniRuntime
+from minivllm.scheduler import Scheduler
+from minivllm.sequence import SequenceState, Status
+from minivllm.model import MiniGPT
+from minivllm.model_runner import ModelRunner
+from minivllm.kv_block_pool import KVBlockPool
 
 
 def request(name, prompt, num_output):

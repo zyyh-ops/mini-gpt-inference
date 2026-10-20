@@ -1,10 +1,10 @@
 from torch import nn, Tensor
 
-from attention import KVCacheCausalSelfAttention, KVCache
-from feed_forward import FeedForward
-from kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
-from decode_batch_metadata import DecodeBatchMetadata
-from kv_block_pool import KVBlockPool
+from .attention import KVCacheCausalSelfAttention, KVCache
+from .feed_forward import FeedForward
+from .kv_runtime import KVRuntimeContext, PrefillRuntimeContext, PrefillChunkContext
+from .decode_batch_metadata import DecodeBatchMetadata
+from .kv_block_pool import KVBlockPool
 
 
 class TransformerBlock(nn.Module):
