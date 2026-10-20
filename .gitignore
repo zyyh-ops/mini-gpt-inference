@@ -13,3 +13,5 @@ logs/
 *.bin
 *.safetensors
 *.trace.json
+*.patch
+artifacts
