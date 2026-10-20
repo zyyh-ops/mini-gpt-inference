@@ -31,6 +31,7 @@ mini-gpt-inference/
 │   ├── bench_preemption.py      # 配对 CPU/CUDA 实验
 │   ├── trace_preemption.py      # 按 iteration 记录 Scheduler 状态
 │   └── record_runtime.py        # Runtime 原生指标 JSON 导出
+├── scripts/                     # 统一 CPU 发布冒烟 / Git 文件审计
 ├── tests/                       # CPU Correctness / Preemption tests
 └── minigpt/                     # 早期 MiniGPT 学习实现
 ```
@@ -89,10 +90,12 @@ python -m experiments.record_runtime --policy recompute --blocks 2 \
 
 ## 正确性与已知局限
 
-Phase 2 工程化副本在 Python 3.13 / PyTorch 2.10 CPU 环境下，共 **33 项测试 PASS**（之前的 29 项 + 4 项 Runtime 观测测试）。覆盖 KV Block 分配/复用、跨 Block Attention、无效 KV Padding（NaN）、生命周期、Scheduler 资源竞争、手动与自动抢占及恢复。**不能据此推导出 GPU/CUDA kernel 已验证。**
+Phase 2 工程化副本在 Python 3.13 / PyTorch 2.10 CPU 环境下，现已 **36 项 CPU 测试 PASS**（原 33 项 + 3 项发布契约测试）。覆盖 KV Block 分配/复用、跨 Block Attention、无效 KV Padding（NaN）、生命周期、Scheduler 资源竞争、手动与自动抢占及恢复。**不能据此推导出 GPU/CUDA kernel 已验证。**
 
 目前尚未完成：动态到达工作负载、GPU Profiler / 吞吐实验、线上级公平性/活性分析。请参见 [公开前检查清单](docs/release_checklist.md)。
 
 ## License
 
-尚未选择开源许可证。公开发布前请按自己的授权意愿添加 `LICENSE` 文件；不要默认代码已采用 MIT/Apache 等许可证。
+本项目采用 **Apache License 2.0** 开源许可证，具体条款参见 [LICENSE](LICENSE)。
+
+本许可证适用于仓库中作者有权授权的原创代码；如包含第三方来源的代码或素材，请保留其各自的授权与署名信息。

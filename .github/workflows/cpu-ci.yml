@@ -1,0 +1,21 @@
+name: CPU correctness and release smoke
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cpu-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU-only PyTorch
+        run: python -m pip install 'torch>=2.1' --index-url https://download.pytorch.org/whl/cpu
+      - name: Install local project without replacing PyTorch
+        run: python -m pip install -e . --no-deps
+      - name: CPU tests and deterministic release smoke
+        run: python -m scripts.release_smoke
