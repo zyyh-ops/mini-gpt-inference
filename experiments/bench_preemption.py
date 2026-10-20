@@ -107,6 +107,7 @@ def make_runtime(model, cfg, policy, num_blocks):
     rt.block_manager, rt.scheduler = manager, sched
     rt.runner = CountingRunner(ModelRunner(model, kv_pool, manager))
     rt.iteration, rt.records = 0, []
+    rt.sync_cuda_timing = getattr(cfg, "sync_cuda_timing", False)
     return rt
 
 
@@ -148,6 +149,13 @@ def run_once(model, cfg, policy, num_blocks):
         raise AssertionError("some requests unfinished")
     assert not rt.block_manager.block_owner
     assert len(rt.block_manager.free_blocks) == num_blocks
+    # Reconcile built-in Runtime instrumentation against an independent
+    # counting runner, outside the timed execution loop.
+    accounting = rt.metrics_summary()
+    assert accounting["preemptions"] == rt.scheduler.num_preemptions
+    assert accounting["repeated_kv_tokens"] == rt.runner.repeated_kv_tokens
+    assert accounting["prefill_tokens"] == rt.runner.total_prefill_tokens
+    assert accounting["decode_tokens"] == rt.runner.total_decode_tokens
     expected = sum(s.max_tokens - s.prompt_length for s in seqs)
     actual = sum(len(s.generated_tokens) for s in seqs)
     assert actual == expected, (actual, expected)
@@ -179,6 +187,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--workload', choices=('baseline','mixed_short'), default='baseline')
     ap.add_argument('--device', choices=('cpu','cuda'), default='cpu')
+    ap.add_argument('--sync-cuda-timing', action='store_true',
+                    help='Synchronize GPU at Runtime stage boundaries (changes timing behavior)')
     ap.add_argument('--num-blocks', default='2,4,8',
                     help='Comma-separated KV Pool block capacities')
     ap.add_argument('--repeats', type=int, default=1)

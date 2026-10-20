@@ -12,6 +12,7 @@
 - **Batched Decode**：批量构造 `positions`、`context_lengths`、`block_tables`、`slot_mapping`；执行批量 QKV、KV Write 与向量化 PagedAttention（仍包含 Python 层逐逻辑 Block 遍历）。
 - **Recompute-based Preemption**：KV 空间不足时抢占其他未保护的活跃请求，丢弃物理 KV，保留历史 Token，之后通过 Chunked Prefill 重建 KV，再继续 Decode。完成重计算时不重复采样。
 - **Scheduler A/B**：比较 `conservative`（最大 KV 容量承诺）与 `recompute`（乐观准入 + 按需抢占）策略，并保留逐轮 Trace 与 CPU Benchmark。
+- **Runtime Observability**：每轮自动生成 `IterationRecord`，记录 Token、抢占、重复 KV 计算、Block 快照及主机/可选 CUDA 同步计时。
 
 ## 代码架构
 
@@ -28,7 +29,8 @@ mini-gpt-inference/
 │   └── paged_attention_batch.py # 批量 PagedAttention reference + online v1
 ├── experiments/
 │   ├── bench_preemption.py      # 配对 CPU/CUDA 实验
-│   └── trace_preemption.py      # 按 iteration 记录 Scheduler 状态
+│   ├── trace_preemption.py      # 按 iteration 记录 Scheduler 状态
+│   └── record_runtime.py        # Runtime 原生指标 JSON 导出
 ├── tests/                       # CPU Correctness / Preemption tests
 └── minigpt/                     # 早期 MiniGPT 学习实现
 ```
@@ -46,7 +48,7 @@ python -m pip install -e .
 以下命令从仓库根目录执行，适用于 Linux/macOS：
 
 ```bash
-# 所有单元测试（原 26 项 + 包导入检查 3 项，合计 29 项）
+# 所有单元测试（原 29 项 + Runtime 观测测试 4 项，合计 33 项）
 python -m unittest discover -s tests -p 'test_*.py' -v
 
 # CPU 快速对比，两个策略分别执行相同的四请求工作负载
@@ -58,6 +60,10 @@ python -m experiments.bench_preemption \
 python -m experiments.trace_preemption \
   --workload mixed_short --blocks 3 \
   --output-json artifacts/preemption/trace_mixed_short_blocks3.json
+
+# 导出 Runtime 原生逐轮指标（不依赖外部 CountingRunner）
+python -m experiments.record_runtime --policy recompute --blocks 2 \
+  --output-json artifacts/observability/recompute_blocks2.json
 ```
 
 > **包运行方式**：`minivllm` 使用包内相对导入，`experiments` 使用 `python -m ...` 作为入口。仓库根目录直接运行这些命令不必设置 `PYTHONPATH`；从其他目录运行前，应先执行 `python -m pip install -e .`。
@@ -79,11 +85,13 @@ python -m experiments.trace_preemption \
 
 参见 [Preemption 实验分析](docs/experiments/preemption.md) 了解完整配置、统计口径、逐轮解释与局限。
 
+逐轮 `IterationRecord` 的指标含义、导出命令、CUDA 异步计时限制见 [Runtime Observability](docs/runtime_observability.md)。
+
 ## 正确性与已知局限
 
-Phase 2 工程化副本在 Python 3.13 / PyTorch 2.10 CPU 环境下，共 **29 项测试 PASS**（26 项原有正确性测试 + 3 项新增包导入测试）。覆盖 KV Block 分配/复用、跨 Block Attention、无效 KV Padding（NaN）、生命周期、Scheduler 资源竞争、手动与自动抢占及恢复。**不能据此推导出 GPU/CUDA kernel 已验证。**
+Phase 2 工程化副本在 Python 3.13 / PyTorch 2.10 CPU 环境下，共 **33 项测试 PASS**（之前的 29 项 + 4 项 Runtime 观测测试）。覆盖 KV Block 分配/复用、跨 Block Attention、无效 KV Padding（NaN）、生命周期、Scheduler 资源竞争、手动与自动抢占及恢复。**不能据此推导出 GPU/CUDA kernel 已验证。**
 
-目前尚未完成：迭代指标落盘、动态到达工作负载、GPU Profiler / 吞吐实验、线上级公平性/活性分析。请参见 [公开前检查清单](docs/release_checklist.md)。
+目前尚未完成：动态到达工作负载、GPU Profiler / 吞吐实验、线上级公平性/活性分析。请参见 [公开前检查清单](docs/release_checklist.md)。
 
 ## License
 

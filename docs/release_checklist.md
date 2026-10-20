@@ -15,7 +15,7 @@
 
 - [x] 删除未使用的 `BlockManager.can_allocate()/allocate()` 旧预分配接口。
 - [ ] 统一命名和类型（例如 `kv_cache_correnctness.py`、`proflie_*.json`、`SequenceState.last_token` 可标注 Optional）。
-- [ ] `MiniRuntime.step()` 声明了 `IterationRecord`、`prefill_ms`、`decode_ms` 等变量，但没有将记录 append 至 `self.records`；应删除误导性占位或真正落盘，并说明 GPU 同步口径。
+- [x] 将 `IterationRecord` append 至 `self.records`，支持每轮抢占、重复 KV 位置、KV Block 快照及 JSON 导出；文档明确 GPU 异步计时口径。
 - [ ] 将根目录 6MB～7MB 的原始 Profiler Trace 移入非默认发布目录；保留轻量摘要/采样结果。`.gitignore` 不会自动让已被 Git 跟踪的文件消失。
 - [x] 测试/实验改用 `python -m ...` 入口；未引入额外命令行框架。
 - [ ] 增加输入边界检测（空请求、重复 seq_id、非法预算、不同 Request 状态）；将断言与异常分类整理。
@@ -32,7 +32,7 @@
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py' -v
-# Phase 2 工程化副本：Ran 29 tests ... OK（请在本地复验）
+# Phase 2 Step 2 审计副本：Ran 33 tests ... OK（请在本地复验）
 ```
 
 审计环境 Python 3.13.5 / torch 2.10.0+cpu；用户之前的实验 JSON 环境 torch 2.12.1+cpu。两者不同；不要跨环境比较绝对耗时。
