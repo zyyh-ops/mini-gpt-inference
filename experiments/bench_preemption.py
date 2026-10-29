@@ -87,6 +87,8 @@ def make_workload(profile="baseline"):
     profiles = {
         "baseline": [("A", 16, 8), ("B", 16, 8), ("C", 12, 6), ("D", 16, 5)],
         "mixed_short": [("A", 4, 32), ("B", 4, 2), ("C", 4, 2), ("D", 4, 2)],
+        # Deliberate but cheap preemption: short C is evicted once.
+        "preempt_benefit": [("A", 4, 32), ("B", 16, 8), ("C", 4, 2), ("D", 4, 2)],
     }
     entries = profiles[profile]
     return [SequenceState(seq_id=name,
@@ -185,7 +187,7 @@ def run_once(model, cfg, policy, num_blocks):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--workload', choices=('baseline','mixed_short'), default='baseline')
+    ap.add_argument('--workload', choices=('baseline','mixed_short','preempt_benefit'), default='baseline')
     ap.add_argument('--device', choices=('cpu','cuda'), default='cpu')
     ap.add_argument('--sync-cuda-timing', action='store_true',
                     help='Synchronize GPU at Runtime stage boundaries (changes timing behavior)')
