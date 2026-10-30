@@ -45,6 +45,10 @@ class IterationRecord:
 
 
 class MiniRuntime:
+    # Per-iteration scheduling logs are opt-in. A class-level default keeps
+    # runtimes assembled via MiniRuntime.__new__ (tests, experiments) quiet.
+    verbose = False
+
     def __init__(
         self,
         num_blocks,
@@ -53,6 +57,7 @@ class MiniRuntime:
         max_num_batched_tokens,
         preemption_policy="conservative",
         sync_cuda_timing=False,
+        verbose=False,
     ):
         self.block_manager = (
             BlockManager(
@@ -94,6 +99,7 @@ class MiniRuntime:
         # An optional *synchronous* measurement mode for CUDA. The default
         # host timers measure dispatch as well as CPU work, not GPU kernel time.
         self.sync_cuda_timing = sync_cuda_timing
+        self.verbose = verbose
         self._kv_high_watermark: dict[str, int] = {}
 
     def _timing_sync(self):
@@ -172,10 +178,11 @@ class MiniRuntime:
             <= self.scheduler.max_running
         ), f"error {len(self.scheduler.running)} + {len(plan.prefill)}, max_running={self.scheduler.running}"
 
-        print(f"\nIteration {self.iteration}")
-        print("prefill:", [x.seq.seq_id for x in plan.prefill])
-        print("decode:", [x.seq_id for x in plan.decode])
-        print("scheduled tokens:", plan.num_scheduled_tokens)
+        if self.verbose:
+            print(f"\nIteration {self.iteration}")
+            print("prefill:", [x.seq.seq_id for x in plan.prefill])
+            print("decode:", [x.seq_id for x in plan.decode])
+            print("scheduled tokens:", plan.num_scheduled_tokens)
 
         decode_begin = time.perf_counter()
 
@@ -304,7 +311,8 @@ class MiniRuntime:
             output_tokens=output_tokens,
             finished_requests=finished_requests,
         ))
-        print("the number of free blocks: ", free_blocks)
+        if self.verbose:
+            print("the number of free blocks: ", free_blocks)
 
 
 def main():
@@ -325,6 +333,7 @@ def main():
             block_size=16,
             max_running=8,
             max_num_batched_tokens=max_num_batched_tokens,
+            verbose=True,  # the demo exists to show these per-iteration logs
         )
 
         seq_list: list[SequenceState] = []
