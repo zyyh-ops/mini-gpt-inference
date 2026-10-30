@@ -61,15 +61,20 @@ class MiniGPT(nn.Module):
         self.enable_activation_checkpointing = enable_activation_checkpointing
 
     def set_prefill_fastpath(self, enabled: bool) -> None:
-        """Toggle first-chunk FP32 SDPA; reference remains default.
-
-        This only changes forward_prefill_chunk for start_pos == 0.
-        Decode and nonzero-offset chunks retain their existing implementations.
-        """
+        """Keep the original v1 boolean API: only first-chunk SDPA."""
         if not isinstance(enabled, bool):
             raise TypeError("enabled must be bool")
         for block in self.blocks:
             block.attn.prefill_fastpath_enabled = enabled
+            block.attn.prefill_prefix_fastpath_enabled = False
+
+    def set_prefill_fastpath_mode(self, mode: str) -> None:
+        """Choose reference, initial-only SDPA v1, or prefix-aware SDPA v2."""
+        if mode not in ('reference', 'sdpa_v1', 'sdpa_v2'):
+            raise ValueError('mode must be reference, sdpa_v1 or sdpa_v2')
+        for block in self.blocks:
+            block.attn.prefill_fastpath_enabled = mode != 'reference'
+            block.attn.prefill_prefix_fastpath_enabled = mode == 'sdpa_v2'
 
     def forward(
         self,

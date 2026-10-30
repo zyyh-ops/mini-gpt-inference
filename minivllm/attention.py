@@ -71,6 +71,8 @@ class KVCacheCausalSelfAttention(nn.Module):
         self.dropout = dropout
         # Step 4: opt-in first-chunk SDPA fast path; default stays reference.
         self.prefill_fastpath_enabled = False
+        # v2 opt-in for chunks with a cached KV prefix.
+        self.prefill_prefix_fastpath_enabled = False
 
         self.qkv = nn.Linear(
             n_embd,
@@ -218,6 +220,46 @@ class KVCacheCausalSelfAttention(nn.Module):
                 attn_mask=None,
                 dropout_p=0.0,
                 is_causal=True,
+            )
+            out = attention_out.transpose(1, 2).contiguous().view(B, T, C)
+            return self.resid_dropout(self.project(out))
+
+        if (
+            self.prefill_fastpath_enabled
+            and self.prefill_prefix_fastpath_enabled
+            and context.start_pos > 0
+            and q.dtype == torch.float32
+        ):
+            # Prefix-Aware SDPA v2: gather the *valid* historical KV tokens
+            # by logical order. Physical blocks need not be adjacent.
+            # The current chunk has already been written into the paged pool,
+            # but its q/k/v tensors can be used directly without gathering it.
+            prefix_len = context.start_pos
+            bs = context.kv_pool.block_size
+            prefix_blocks = (prefix_len + bs - 1) // bs
+            physical_ids = context.seq_state.block_table[:prefix_blocks]
+            if len(physical_ids) != prefix_blocks:
+                raise RuntimeError('incomplete KV block table for prefix')
+            block_ids = torch.tensor(physical_ids, device=q.device, dtype=torch.long)
+            prefix_k = context.kv_pool.k[context.layer_idx].index_select(0, block_ids)
+            prefix_v = context.kv_pool.v[context.layer_idx].index_select(0, block_ids)
+            # [num_blocks, bs, H, D] -> [1, H, prefix_len, D]
+            prefix_k = (prefix_k.reshape(-1, self.n_head, self.head_size)
+                        [:prefix_len].transpose(0, 1).unsqueeze(0))
+            prefix_v = (prefix_v.reshape(-1, self.n_head, self.head_size)
+                        [:prefix_len].transpose(0, 1).unsqueeze(0))
+            all_k = torch.cat((prefix_k, k), dim=2)
+            all_v = torch.cat((prefix_v, v), dim=2)
+
+            # Query i is at absolute position (prefix_len + i).
+            # SDPA is_causal=True gives upper-left alignment and is *wrong*
+            # when Q_len < KV_len. Explicit mask uses absolute positions.
+            query_positions = prefix_len + torch.arange(T, device=q.device)
+            key_positions = torch.arange(prefix_len + T, device=q.device)
+            allowed = key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)
+            attention_out = F.scaled_dot_product_attention(
+                q, all_k, all_v, attn_mask=allowed,
+                dropout_p=0.0, is_causal=False,
             )
             out = attention_out.transpose(1, 2).contiguous().view(B, T, C)
             return self.resid_dropout(self.project(out))

@@ -246,11 +246,24 @@ def main():
         or args.batch<1 or args.warmups<0 or args.repeats<1):
         ap.error('invalid parameters')
     torch.set_num_threads(1)
+    # Day 5: strict-FP32 correctness and performance A/B must use the same
+    # matrix-multiplication precision across reference and SDPA fast paths.
+    # Do NOT force the SDPA MATH backend: retain automatic CUDA selection.
+    if args.device == 'cuda':
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     device=torch.device(args.device)
     model=make_model(args,device)
     result=(correctness(args,device,model) if args.mode=='correctness'
             else e2e(args,device,model) if args.mode=='e2e'
             else ops(args,device,model))
+    result['precision'] = {
+        'matmul_allow_tf32': bool(torch.backends.cuda.matmul.allow_tf32),
+        'cudnn_allow_tf32': bool(torch.backends.cudnn.allow_tf32),
+        'float32_matmul_precision': torch.get_float32_matmul_precision(),
+        'sdpa_backend': 'auto',
+    }
+    print(f'PRECISION {result["precision"]}', flush=True)
     args.output_json.parent.mkdir(parents=True,exist_ok=True)
     args.output_json.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     print(f'STEP4 {args.mode.upper()} PASS; saved {args.output_json}',flush=True)
