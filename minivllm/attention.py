@@ -69,6 +69,8 @@ class KVCacheCausalSelfAttention(nn.Module):
         self.head_size = n_embd // n_head
         self.block_size = block_size
         self.dropout = dropout
+        # Step 4: opt-in first-chunk SDPA fast path; default stays reference.
+        self.prefill_fastpath_enabled = False
 
         self.qkv = nn.Linear(
             n_embd,
@@ -200,6 +202,25 @@ class KVCacheCausalSelfAttention(nn.Module):
 
                 v_new=v_tokens[i],
             )
+
+        # The first chunk has no prefix: q and k have the same absolute
+        # starting position, so SDPA's upper-left causal alignment is valid.
+        # Keep the existing KV writes above unchanged for Paged KV semantics.
+        # Later chunks / recompute prefixes have start_pos > 0 and must keep
+        # the reference path until an offset-aware mask is implemented.
+        if (
+            self.prefill_fastpath_enabled
+            and context.start_pos == 0
+            and q.dtype == torch.float32
+        ):
+            attention_out = F.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=None,
+                dropout_p=0.0,
+                is_causal=True,
+            )
+            out = attention_out.transpose(1, 2).contiguous().view(B, T, C)
+            return self.resid_dropout(self.project(out))
 
         outputs = []
 
