@@ -46,7 +46,7 @@ def e2e(args, device, model):
             for backend in order:
                 model.set_prefill_fastpath_mode(backend)
                 run=run_once(model,old_args,device,batch=args.batch,
-                             prompt_len=p,factor=1.0,policy=args.policy,
+                             prompt_len=p,factor=args.kv_factor,policy=args.policy,
                              with_trace=False)
                 counts=tuple(run[key] for key in (
                     'iterations','output_tokens','preemptions','repeated_kv_tokens',
@@ -58,6 +58,12 @@ def e2e(args, device, model):
                     raise AssertionError(f'Output token mismatch {p=} {backend=} {rep=}')
                 if counts!=expected_counts:
                     raise AssertionError(f'Lifecycle mismatch {p=} {backend=} {rep=}: {counts} vs {expected_counts}')
+                if args.require_preemption and run['preemptions'] <= 0:
+                    raise AssertionError(
+                        f'Expected real preemption, but got preemptions=0; '
+                        f'prompt={p}, batch={args.batch}, KV factor={args.kv_factor}. '
+                        'Reduce --kv-factor or change the workload.'
+                    )
                 if rep>=args.warmups:
                     run['backend']=backend
                     run['repeat']=rep-args.warmups
@@ -65,12 +71,14 @@ def e2e(args, device, model):
                     print(f'PASS P={p:3} budget={args.token_budget:3} '
                           f'backend={backend:9} wall={run["total_wall_ms"]:.3f}ms '
                           f'TTFT={run["avg_ttft_ms"]:.3f}ms '
-                          f'tok/s={run["output_tok_s"]:.1f} preempt={run["preemptions"]}',flush=True)
+                          f'tok/s={run["output_tok_s"]:.1f} preempt={run["preemptions"]} '
+                          f'replay={run["repeated_kv_tokens"]}',flush=True)
     groups=defaultdict(list)
     for r in runs:groups[(r['prompt_len'],r['backend'])].append(r)
     summaries=[]
     for p in args.prompts:
         row={'prompt_len':p,'token_budget':args.token_budget,'batch':args.batch,
+             'kv_factor':args.kv_factor,'num_blocks':groups[(p,'reference')][0]['num_blocks'],
              'token_equality':True,'lifecycle_count_equality':True}
         for backend in BACKENDS:
             g=groups[(p,backend)]
@@ -195,12 +203,19 @@ def main():
     ap.add_argument('--block-size',type=int,default=16)
     ap.add_argument('--token-budget',type=int,default=64)
     ap.add_argument('--policy',choices=('conservative','recompute'),default='conservative')
+    ap.add_argument('--kv-factor',type=float,default=1.0,
+                    help='KV capacity factor; 1.0 fits all max demands, 0.5 creates contention')
+    ap.add_argument('--require-preemption',action='store_true',
+                    help='Fail if any compared backend does not actually preempt')
     ap.add_argument('--warmups',type=int,default=2)
     ap.add_argument('--repeats',type=int,default=7)
     ap.add_argument('--max-steps',type=int,default=10000)
     ap.add_argument('--output-json',type=Path,default=Path('artifacts/gpu/prefill_sdpa_v2_ab.json'))
     args=ap.parse_args()
     if args.device=='cuda' and not torch.cuda.is_available():ap.error('CUDA unavailable')
+    if not (0 < args.kv_factor <= 1):ap.error('--kv-factor must be in (0,1]')
+    if args.require_preemption and (args.mode != 'e2e' or args.policy != 'recompute'):
+        ap.error('--require-preemption requires --mode e2e --policy recompute')
     if not (args.prompts and args.batch>0 and args.output_len>=2 and args.token_budget>0 and
             args.dim>0 and args.heads>0 and args.layers>0 and args.dim%args.heads==0):
         ap.error('invalid configuration')
