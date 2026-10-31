@@ -76,6 +76,17 @@ class MiniGPT(nn.Module):
             block.attn.prefill_fastpath_enabled = mode != 'reference'
             block.attn.prefill_prefix_fastpath_enabled = mode == 'sdpa_v2'
 
+    def set_decode_attention_backend(self, backend: str) -> None:
+        """Opt in to Triton *batched decode* only; leave Prefill unchanged.
+
+        The Triton v0 backend requires CUDA, FP32 and a supported KV layout.
+        Those constraints are validated at dispatch, not silently bypassed.
+        """
+        if backend not in ("reference", "triton_v0"):
+            raise ValueError("decode backend must be reference or triton_v0")
+        for block in self.blocks:
+            block.attn.decode_attention_backend = backend
+
     def forward(
         self,
         idx: Tensor,

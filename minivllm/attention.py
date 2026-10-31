@@ -73,6 +73,8 @@ class KVCacheCausalSelfAttention(nn.Module):
         self.prefill_fastpath_enabled = False
         # v2 opt-in for chunks with a cached KV prefix.
         self.prefill_prefix_fastpath_enabled = False
+        # Decode-only, explicit opt-in. State dict and Prefill remain unchanged.
+        self.decode_attention_backend = "reference"
 
         self.qkv = nn.Linear(
             n_embd,
@@ -389,19 +391,29 @@ class KVCacheCausalSelfAttention(nn.Module):
             block_offsets,
         ] = v
 
-        attention_out = (
-            paged_attention_batch_online_v1(
-                q=q,
-
-                pool=kv_pool,
-
+        # The newly appended K/V MUST be visible before either backend reads
+        # the KV pool. Triton is an attention-only kernel: it does not write KV.
+        if self.decode_attention_backend == "reference":
+            attention_out = paged_attention_batch_online_v1(
+                q=q, pool=kv_pool,
                 block_tables=metadata.block_tables,
-
                 context_lengths=metadata.context_lengths,
-
                 layer_idx=layer_idx,
             )
-        )
+        elif self.decode_attention_backend == "triton_v0":
+            if torch.is_grad_enabled() and q.requires_grad:
+                raise RuntimeError("triton_v0 is inference-only; run under torch.inference_mode()")
+            # Lazy import: CPU-only tests and default Runtime do not require
+            # the Triton dependency. Unsupported dtype/device fails explicitly.
+            from .triton_paged_decode import paged_attention_batch_triton_v0
+            attention_out = paged_attention_batch_triton_v0(
+                q=q, pool=kv_pool,
+                block_tables=metadata.block_tables,
+                context_lengths=metadata.context_lengths,
+                layer_idx=layer_idx,
+            )
+        else:
+            raise ValueError(f"unknown decode attention backend: {self.decode_attention_backend}")
 
         attention_out = attention_out.reshape(B, 1, self.n_embd)
 
