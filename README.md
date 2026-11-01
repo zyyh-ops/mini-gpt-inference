@@ -1,101 +1,244 @@
 # Mini-GPT Inference Runtime
 
-一个面向 **LLM 推理系统原理与性能实验** 的教学型 Mini-GPT Runtime，围绕请求调度、Paged KV Cache、Continuous Batching、Chunked Prefill、Batched Decode 和 **Recompute-based Preemption** 实现端到端推理流程。
+一个面向 **LLM Inference Runtime 原理、状态管理与性能优化实验**
+的教学型推理运行时。项目使用 PyTorch 实现 Mini-GPT
+推理路径，重点研究请求调度、Paged KV Cache、Chunked Prefill、Batched
+Decode、Recompute-based Preemption，以及 Prefill / Decode Attention
+后端优化。
 
-> **项目定位**：这是为理解推理引擎底层机制而构建的 educational runtime，**不是**生产级 vLLM/SGLang 替代品。现有 CPU 测试验证了部分核心正确性与调度行为；尚未提供可与生产引擎直接比较的 GPU Serving Benchmark。
+> **项目定位**：Educational Inference Runtime，而不是生产级 vLLM /
+> SGLang 替代品。项目使用小型 Mini-GPT
+> 与封闭式工作负载验证系统机制，不提供网络
+> Serving、真实模型权重管理或线上 SLO 能力。
 
-## 核心实现
+> **Release Closure**：项目最终 Release Closure
+> 已完成，最终检查均已确认通过。
 
-- **Request lifecycle**：`WAITING → PREFILLING → RUNNING → FINISHED`；请求完成后回收其 KV Blocks。
-- **KV Block Manager**：按需分配物理 Block，维护每个请求的 Block Table 与所有权映射，支持释放及复用。
-- **Chunked Prefill**：受每轮 Token Budget 与 KV 空间约束，将 Prefill 切成多个调度 Chunk。
-- **Batched Decode**：批量构造 `positions`、`context_lengths`、`block_tables`、`slot_mapping`；执行批量 QKV、KV Write 与向量化 PagedAttention（仍包含 Python 层逐逻辑 Block 遍历）。
-- **Recompute-based Preemption**：KV 空间不足时抢占其他未保护的活跃请求，丢弃物理 KV，保留历史 Token，之后通过 Chunked Prefill 重建 KV，再继续 Decode。完成重计算时不重复采样。
-- **Scheduler A/B**：比较 `conservative`（最大 KV 容量承诺）与 `recompute`（乐观准入 + 按需抢占）策略，并保留逐轮 Trace 与 CPU Benchmark。
-- **Runtime Observability**：每轮自动生成 `IterationRecord`，记录 Token、抢占、重复 KV 计算、Block 快照及主机/可选 CUDA 同步计时。
+## 核心能力
 
-## 代码架构
+-   **Request lifecycle**：`WAITING → PREFILLING → RUNNING → FINISHED`。
+-   **Scheduler**：按 Decode、已有
+    Prefill、新请求准入的顺序构造每轮执行计划；受
+    `max_running`、`max_num_batched_tokens` 和 KV Block 容量约束。
+-   **Paged KV Cache**：逻辑 Token 位置通过 Block Table 映射到非连续物理
+    Block；BlockManager 管理分配、所有权、释放和复用，KVBlockPool
+    保存实际 K/V Tensor。
+-   **Chunked Prefill**：把长 Prompt 拆成多个 Prefill Chunk，支持 Token
+    Budget 与 KV 容量约束。
+-   **Batched Decode**：将多个请求的输入 Token、Position、Context
+    Length、Block Table 和 Slot Mapping 组织为批量 Tensor。
+-   **Recompute-based Preemption**：KV
+    容量不足时抢占未受保护的活跃请求，释放物理 KV，保留语义 Token
+    历史，之后重新 Prefill 构建 KV，不重复采样已经生成的 pending Token。
+-   **Prefill Attention optimization**：Reference、SDPA v1（首 Chunk）和
+    Prefix-aware SDPA v2（包含非零起点 Chunk）。
+-   **Decode Attention optimization**：PyTorch batched online-softmax
+    Reference，以及可显式启用的 Triton fused Paged Decode Attention v0。
+-   **Runtime observability**：逐轮记录 Prefill/Decode Token
+    数、队列状态、KV Block 使用情况、抢占次数、重复 KV
+    计算量和阶段耗时。
+-   **Release engineering**：单元测试、CPU Release Smoke、Git
+    tracked-file audit 和 Apache License 2.0。
 
-```text
-mini-gpt-inference/
-├── minivllm/
-│   ├── mini_runtime.py          # Runtime 入口与单轮执行循环
-│   ├── scheduler.py             # Token/KV Budget、准入与自动抢占
-│   ├── sequence.py              # 请求生命周期、历史 Token、状态
-│   ├── block_manager.py         # Paged KV Block 分配 / 释放 / 不变量
-│   ├── kv_block_pool.py         # KV Tensor 的物理存储
-│   ├── model_runner.py          # Prefill / Decode 输入元数据构造
-│   ├── model.py                 # KV-aware MiniGPT
-│   └── paged_attention_batch.py # 批量 PagedAttention reference + online v1
-├── experiments/
-│   ├── bench_preemption.py      # 配对 CPU/CUDA 实验
-│   ├── trace_preemption.py      # 按 iteration 记录 Scheduler 状态
-│   └── record_runtime.py        # Runtime 原生指标 JSON 导出
-├── scripts/                     # 统一 CPU 发布冒烟 / Git 文件审计
-├── tests/                       # CPU Correctness / Preemption tests
-└── minigpt/                     # 早期 MiniGPT 学习实现
+## 架构概览
+
+``` text
+Request(Token IDs)
+       |
+       v
+MiniRuntime.add_request
+       |
+       v
+SequenceState <---- semantic history / pending token / status
+       |
+       v
+Scheduler.schedule
+       |                         |
+       | Decode batch            | Prefill work items
+       v                         v
+ModelRunner.decode_batch    ModelRunner.prefill_chunk
+       |                         |
+       v                         v
+MiniGPT.decode_batch        MiniGPT.prefill_chunk
+       |                         |
+       v                         v
+KV Write -> Paged Attention  KV Write -> Reference / SDPA v1 / SDPA v2
+       |                         |
+       +------------+------------+
+                    |
+                    v
+                 Logits
+                    |
+                    v
+              Greedy Argmax
+                    |
+                    v
+       SequenceState / Scheduler.postprocess
+                    |
+                    v
+            Finish and free KV Blocks
 ```
 
-完整模块责任与关键不变量见 [docs/architecture.md](docs/architecture.md)，旧导入方式升级说明见 [Phase 2 迁移指南](docs/phase2_migration.md)。
+更完整的组件职责、状态所有权和关键不变量见：
 
-## 运行与验证
+-   [架构设计](docs/architecture.md)
+-   [Paged KV Cache 与调度](docs/kv-cache-and-scheduling.md)
+-   [Attention 后端与优化](docs/attention-backends.md)
+-   [Benchmark 与 Profiling](docs/benchmark-and-profiling.md)
+-   [实验结果](docs/benchmark-results.md)
+-   [测试、Release 与限制](docs/testing-and-release.md)
+-   [已知限制与非目标](docs/known-limitations.md)
 
-```bash
+## 代码结构
+
+``` text
+mini-gpt-inference/
+├── minivllm/
+│   ├── mini_runtime.py             # Runtime 入口、单轮执行和 IterationRecord
+│   ├── scheduler.py                # Decode/Prefill 调度、准入和抢占
+│   ├── sequence.py                 # SequenceState、请求状态和 Token 历史
+│   ├── block_manager.py            # 物理 Block 分配、映射、释放和不变量
+│   ├── kv_block_pool.py            # 实际 K/V Tensor 存储
+│   ├── model_runner.py              # Runtime state -> GPU input/metadata
+│   ├── decode_batch_metadata.py    # Batched Decode metadata
+│   ├── kv_runtime.py               # Prefill/Decode 单次执行上下文
+│   ├── model.py                    # KV-aware MiniGPT
+│   ├── attention.py                # Prefill/Decode Attention 路径
+│   ├── paged_attention_batch.py    # Batched PyTorch online-softmax Reference
+│   └── triton_paged_decode.py      # Triton fused Decode Attention v0
+├── minigpt/                        # 较早期 Mini-GPT 学习实现
+├── experiments/                    # CPU/GPU correctness、benchmark 和 profiling
+├── scripts/
+│   ├── release_smoke.py             # 一键 CPU Release Smoke
+│   └── tracked_file_audit.py        # Git tracked path/size 只读审计
+├── tests/                           # 单元测试和后端集成测试
+├── docs/                            # 项目技术文档
+├── README.md
+├── LICENSE
+├── pyproject.toml
+└── requirements.txt
+```
+
+## Quick Start
+
+建议使用独立 Python 环境。项目运行时依赖 PyTorch；CUDA
+环境应先安装与本机驱动/CUDA 兼容的 PyTorch。
+
+``` bash
 python -m pip install -e .
 ```
 
-主要运行路径依赖 **PyTorch**。建议创建独立虚拟环境，并从仓库根目录执行 `python -m pip install -e .` 安装可编辑包；如果已经单独安装了与 CUDA 匹配的 PyTorch，可使用 `python -m pip install -e . --no-deps`。`requirements.txt` 已精简为运行时的最小依赖。
+如果已经安装了正确的 PyTorch，不希望安装过程替换 PyTorch：
 
-以下命令从仓库根目录执行，适用于 Linux/macOS：
+``` bash
+python -m pip install -e . --no-deps
+```
 
-```bash
-# 所有单元测试（原 29 项 + Runtime 观测测试 4 项，合计 33 项）
+运行单元测试：
+
+``` bash
 python -m unittest discover -s tests -p 'test_*.py' -v
+```
 
-# CPU 快速对比，两个策略分别执行相同的四请求工作负载
+运行完整 CPU Release Smoke：
+
+``` bash
+python -m scripts.release_smoke
+```
+
+运行只读 Git tracked-file audit：
+
+``` bash
+python -m scripts.tracked_file_audit
+```
+
+## 常用实验入口
+
+CPU 调度策略对照：
+
+``` bash
 python -m experiments.bench_preemption \
-  --workload mixed_short --device cpu --num-blocks 3 \
-  --repeats 5 --output-json artifacts/preemption/cpu_mixed_short_blocks3.json
+  --device cpu \
+  --workload baseline \
+  --num-blocks 2 \
+  --repeats 1 \
+  --output-json artifacts/preemption/cpu_baseline.json
+```
 
-# Scheduler 逐轮 Trace；这是行为追踪，不用于计时
-python -m experiments.trace_preemption \
-  --workload mixed_short --blocks 3 \
-  --output-json artifacts/preemption/trace_mixed_short_blocks3.json
+导出逐轮 Runtime Telemetry：
 
-# 导出 Runtime 原生逐轮指标（不依赖外部 CountingRunner）
-python -m experiments.record_runtime --policy recompute --blocks 2 \
+``` bash
+python -m experiments.record_runtime \
+  --device cpu \
+  --policy recompute \
+  --blocks 2 \
   --output-json artifacts/observability/recompute_blocks2.json
 ```
 
-> **包运行方式**：`minivllm` 使用包内相对导入，`experiments` 使用 `python -m ...` 作为入口。仓库根目录直接运行这些命令不必设置 `PYTHONPATH`；从其他目录运行前，应先执行 `python -m pip install -e .`。
+GPU Prefill SDPA v2 correctness：
 
-## Scheduler 策略实验（CPU Smoke）
+``` bash
+python -m experiments.gpu_prefill_fastpath_v2_ab \
+  --device cuda \
+  --mode correctness \
+  --prompts 128,256 \
+  --token-budget 64 \
+  --dim 256 --layers 4 --heads 8 \
+  --output-json artifacts/gpu/prefill_sdpa_v2_correctness.json
+```
 
-所有实验均使用 Tiny MiniGPT（1 层、hidden size 16、2 heads、FP32、CPU），所有请求同一时刻进入系统，greedy decode；不同容量配置下，两种策略输出 Token 序列一致。**下面的数字仅描述这个简化同步 Runtime 的 CPU 行为，不是生产级在线性能。**
+GPU Triton Decode Runtime A/B：
 
-| Workload | KV Blocks | 策略 | Iterations | Preemptions | Repeated KV Tokens | 平均 E2E (ms) |
-|---|---:|---|---:|---:|---:|---:|
-| Baseline | 2 | Conservative | 27 | 0 | 0 | 15.82 |
-| Baseline | 2 | Recompute | 27 | 3 | 44 | 20.09 |
-| Baseline | 4 | Conservative | 14 | 0 | 0 | 14.00 |
-| Baseline | 4 | Recompute | 14 | 2 | 28 | 17.30 |
-| Mixed-Short | 3 | Conservative | 34 | 0 | 0 | 20.13 |
-| Mixed-Short | 3 | Recompute | 32 | 0 | 0 | 8.07 |
+``` bash
+python -m experiments.gpu_day6_runtime_decode_ab \
+  --device cuda \
+  --mode e2e \
+  --prompts 128,256 \
+  --batches 1,4 \
+  --token-budget 64 \
+  --output-len 8 \
+  --dim 256 --heads 8 --layers 4 --block-size 16 \
+  --warmups 2 --repeats 7 \
+  --output-json artifacts/gpu/day6_step5_e2e_ab.json
+```
 
-**实验解读**：Baseline 负载中激进准入导致额外 KV 重算、性能反而变差；Mixed-Short 负载中三个短请求可以在长请求扩展 KV 之前完成，乐观准入显著降低平均请求延迟，但并未在这组 CPU 测试中明确提高整体吞吐。后一个结果由**乐观准入**而非实际发生的 Preemption 带来（抢占次数为零）。
+真实 Recompute Preemption correctness / E2E 命令见 [Benchmark 与
+Profiling](docs/benchmark-and-profiling.md)。
 
-参见 [Preemption 实验分析](docs/experiments/preemption.md) 了解完整配置、统计口径、逐轮解释与局限。
+## 已验证结果摘要
 
-逐轮 `IterationRecord` 的指标含义、导出命令、CUDA 异步计时限制见 [Runtime Observability](docs/runtime_observability.md)。
+在 NVIDIA RTX 5090、PyTorch `2.6.0a0+ecf3bae40a.nv25.01`、FP32、TF32
+关闭的指定实验配置下：
 
-## 正确性与已知局限
+-   Prefix-aware SDPA v2 相比 Prefill
+    Reference，在单请求和四请求闭合批次中取得约 **4.69×--10.57×** E2E
+    加速。
+-   Triton fused Decode Attention v0 的独立 Attention-only
+    benchmark，在测试的 Batch/Context 组合中取得约 **12.18×--81.68×**
+    加速。
+-   Triton Decode 接入 Runtime 后，在无抢占闭合批次中取得约
+    **3.80×--6.34×** E2E 加速。
+-   在强制发生 Recompute Preemption 的工作负载中，Reference 与 Triton
+    后端均发生 1 次抢占、重放 16 个 KV Token，输出 Token
+    与生命周期计数一致；Triton 后端取得约 **4.31×--5.44×** E2E 加速。
 
-Phase 2 工程化副本在 Python 3.13 / PyTorch 2.10 CPU 环境下，现已 **36 项 CPU 测试 PASS**（原 33 项 + 3 项发布契约测试）。覆盖 KV Block 分配/复用、跨 Block Attention、无效 KV Padding（NaN）、生命周期、Scheduler 资源竞争、手动与自动抢占及恢复。**不能据此推导出 GPU/CUDA kernel 已验证。**
+这些是特定小模型、FP32、闭合批次和指定 GPU
+环境下的实验结果，不代表生产模型或在线 Serving
+的普遍性能。完整实验条件与数据见
+[benchmark-results.md](docs/benchmark-results.md)。
 
-目前尚未完成：动态到达工作负载、GPU Profiler / 吞吐实验、线上级公平性/活性分析。请参见 [公开前检查清单](docs/release_checklist.md)。
+## 项目边界
+
+当前项目是教学型 Runtime：
+
+-   使用 Mini-GPT 小模型和 Token ID 输入，不包含完整网络 Serving 服务。
+-   Decode 采用 Greedy Argmax，不提供完整的 Sampling API。
+-   当前 Runtime 没有实现 Prefix Cache、Tensor Parallel、Pipeline
+    Parallel 或 CUDA Graph。
+-   Triton v0 仅覆盖指定 CUDA/FP32/MHA Decode Attention 场景。
+
+更多限制见 [known-limitations.md](docs/known-limitations.md)。
 
 ## License
 
-本项目采用 **Apache License 2.0** 开源许可证，具体条款参见 [LICENSE](LICENSE)。
-
-本许可证适用于仓库中作者有权授权的原创代码；如包含第三方来源的代码或素材，请保留其各自的授权与署名信息。
+Apache License 2.0，详见 [LICENSE](LICENSE)。

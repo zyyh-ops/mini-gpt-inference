@@ -23,4 +23,6 @@ dist/
 build/
 
 FINAL_RELEASE_STEPS.md
-docs/
+docs
+
+Mini-GPT-Inference-Runtime_Job-Prep-Package
